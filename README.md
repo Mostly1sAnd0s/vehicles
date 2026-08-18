@@ -8,7 +8,7 @@ sources and obstacles). See `PLAN.md` for the full design.
 
 ```bash
 npm run build    # sync src/ -> public/src (pure ESM core used by the browser)
-npm run serve    # http://localhost:8080  (python3 http.server over public/)
+npm run serve    # Node static server; auto-avoids busy ports, PORT=<n> pins
 ```
 
 For real deployment copy `public/` to a web root (nginx/Caddy/anything static).
