@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "powered_wheel": {
+    "maxForce": 1.0,
+    "powerCurve": "linear"
+  }
+}

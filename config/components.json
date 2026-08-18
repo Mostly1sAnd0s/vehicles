@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "id": "powered_wheel",
+      "name": "Powered Wheel",
+      "category": "actuator",
+      "mass": 2,
+      "size": 16,
+      "shape": "circle",
+      "ports": [{ "id": "drive", "kind": "actuator_input" }],
+      "defaults": { "maxForceRef": "actuators.json#powered_wheel" }
+    },
+    {
+      "id": "caster_wheel",
+      "name": "Caster Wheel",
+      "category": "passive",
+      "mass": 1,
+      "size": 10,
+      "shape": "circle",
+      "ports": [],
+      "defaults": {}
+    },
+    {
+      "id": "light_sensor",
+      "name": "Light Sensor",
+      "category": "sensor",
+      "mass": 0.5,
+      "size": 8,
+      "shape": "circle",
+      "ports": [{ "id": "out", "kind": "sensor_output" }],
+      "defaults": { "modelRef": "sensors.json#light", "range": 300, "aimAngle": 0 }
+    },
+    {
+      "id": "distance_sensor",
+      "name": "Distance Sensor",
+      "category": "sensor",
+      "mass": 0.5,
+      "size": 8,
+      "shape": "circle",
+      "ports": [{ "id": "out", "kind": "sensor_output" }],
+      "defaults": { "modelRef": "sensors.json#distance", "range": 150, "aimAngle": 0 }
+    },
+    {
+      "id": "generic_mount",
+      "name": "Sensor Mount",
+      "category": "mount",
+      "mass": 0.25,
+      "size": 6,
+      "shape": "circle",
+      "ports": [],
+      "defaults": {}
+    }
+  ]
+}

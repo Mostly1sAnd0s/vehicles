@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "Braitenberg Vehicles",
+  "defaults": {
+    "bodyWidth": 80,
+    "bodyHeight": 40,
+    "snapPointCount": 12,
+    "timeScale": 1.0,
+    "fixedTimestepMs": 16.6667,
+    "thrustScale": 0.001
+  }
+}

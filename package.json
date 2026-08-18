@@ -1,0 +1,15 @@
+{
+  "name": "braitenberg-vehicles",
+  "version": "0.1.0",
+  "description": "Braitenberg Vehicles simulator - client-side SPA",
+  "type": "module",
+  "scripts": {
+    "test": "node --test 'tests/*.test.js'",
+    "build": "rm -rf public/src && cp -R src public/",
+    "serve": "python3 -m http.server 8080 --directory public"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "matter-js": "^0.20.0"
+  }
+}

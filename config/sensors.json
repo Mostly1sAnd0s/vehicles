@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "light": {
+    "falloffPower": 2,
+    "minDistance": 5,
+    "defaultRange": 600,
+    "saturation": 2.0
+  },
+  "distance": {
+    "model": "raycast",
+    "defaultRange": 150,
+    "beamWidthDeg": 4,
+    "showBeam": true,
+    "output": "normalized_inverse"
+  }
+}

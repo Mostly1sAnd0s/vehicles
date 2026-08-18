@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "keybindings": {
+    "playPause": "Space",
+    "step": "Period",
+    "reset": "KeyR",
+    "toggleBeams": "KeyB"
+  }
+}

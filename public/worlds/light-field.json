@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "name": "Light Field",
+  "physics": { "gravity": 0, "timeScale": 1.0 },
+  "elements": [
+    { "id": "sun1", "type": "light", "primitive": "circle", "position": { "x": -650, "y": -250 }, "rotation": 0, "scale": { "x": 1, "y": 1 }, "properties": { "intensity": 6000 } },
+    { "id": "dim2", "type": "light", "primitive": "circle", "position": { "x": 700, "y": 400 }, "rotation": 0, "scale": { "x": 1, "y": 1 }, "properties": { "intensity": 800 } },
+    { "id": "rock1", "type": "rock", "primitive": "circle", "position": { "x": 250, "y": 120 }, "rotation": 0, "scale": { "x": 1, "y": 1 }, "properties": { "radius": 45 } },
+    { "id": "wall1", "type": "obstacle", "primitive": "rect", "position": { "x": 150, "y": -250 }, "rotation": 0.4, "scale": { "x": 1, "y": 1 }, "properties": { "width": 220, "height": 30 } }
+  ],
+  "vehiclePrototypes": [
+    {
+      "id": "proto-sun-car",
+      "name": "Vehicle A",
+      "vehicleRef": "vehicles/sun-car.json",
+      "instances": [
+        { "id": "inst1", "position": { "x": -200, "y": -50 }, "rotation": 0.3 },
+        { "id": "inst2", "position": { "x": -50, "y": 50 }, "rotation": -0.4 },
+        { "id": "inst3", "position": { "x": 100, "y": -150 }, "rotation": 1.2 }
+      ]
+    }
+  ]
+}

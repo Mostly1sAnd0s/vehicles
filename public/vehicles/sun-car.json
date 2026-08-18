@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "sun-car",
+  "name": "Sun Car (Vehicle 2)",
+  "body": { "shape": "rect", "width": 80, "height": 40 },
+  "components": [
+    { "id": "wL", "type": "powered_wheel", "local": { "x": -40, "y": -6.7 }, "localRotation": 0, "props": {} },
+    { "id": "wR", "type": "powered_wheel", "local": { "x": -40, "y": 6.7 }, "localRotation": 0, "props": {} },
+    { "id": "sL", "type": "light_sensor", "local": { "x": 40, "y": -6.7 }, "aimAngle": 0, "props": { "range": 900 } },
+    { "id": "sR", "type": "light_sensor", "local": { "x": 40, "y": 6.7 }, "aimAngle": 0, "props": { "range": 900 } }
+  ],
+  "wires": [
+    { "id": "wire1", "from": { "componentId": "sL", "port": "out" }, "to": { "componentId": "wL", "port": "drive" }, "polarity": "excitatory", "weight": 1.0 },
+    { "id": "wire2", "from": { "componentId": "sR", "port": "out" }, "to": { "componentId": "wR", "port": "drive" }, "polarity": "excitatory", "weight": 1.0 }
+  ]
+}
