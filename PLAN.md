@@ -194,3 +194,11 @@ Sharing is via import/export of these JSON files. Manual drag-and-drop file hand
 * UI panels are defined in `ui.json` to allow layout changes without code.
 
 This plan provides a modular, config-driven foundation for Vehicles 1-7 simulation with clear paths for extension.
+
+## Future Work (parked, not yet implemented)
+
+### Per-motor rotation direction
+Wire polarity currently only scales/inverts the *signal* into `computeActuation` (`src/actuators.js`). The physical spin direction of a motor relative to that signal is implicit. It should be an explicit, adjustable parameter per actuator — e.g. a `direction: 'cw' | 'ccw'` property on the component instance (or `actuators.json`) that multiplies the final force by its own sign. This decouples "how the sensor drives the motor" from "which way the motor turns." Note the current symptom this addresses: with inhibitory polarity the relationship is correct but wheels visually rotate the "wrong" way.
+
+### Motor-response scripting layer
+A lightweight scripting/condition language so a user can define how motor output responds to sensor input — thresholds, dead-bands, saturation points, and conditional branches (e.g. "if light > 0.6 then full speed; if 0.2 < light < 0.6 then half; else stopped"). This generalizes the linear `value × weight × polarity` model into a configurable response curve / decision table evaluated per actuator each step. Design should keep `computeActuation` as the single seam so both simple and scripted responses share the same clamping and force pipeline.

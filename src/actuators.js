@@ -1,5 +1,11 @@
 /**
  * Actuator model: sensor value(s) through wires -> motor force, clamped.
+ *
+ * TODO(future, PLAN.md §Future Work): the polarity sign here only inverts the
+ * signal. Per-motor spin direction (cw/ccw) should be an explicit actuator
+ * parameter applied on top of this force, and a small threshold/condition
+ * scripting layer may replace the linear value×weight×polarity model.
+ * Keep this function as the single seam both would flow through.
  * Accepts a single wire object or an array of wires feeding the actuator.
  * config from actuators.json, e.g. { maxForce: 1.0 }
  */
