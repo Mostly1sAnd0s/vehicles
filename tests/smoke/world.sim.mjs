@@ -5,6 +5,14 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = 9222;
+const WEB = 8902;
+
+// free the web port in case a previous run left a server behind
+const freePort = spawn('sh', ['-c', `lsof -ti:${WEB} | xargs kill 2>/dev/null; true`], { stdio: 'ignore' });
+await new Promise(r => freePort.on('exit', r));
+
+const srv = spawn('python3', ['-m', 'http.server', String(WEB), '--directory', 'public'], { stdio: 'ignore' });
+await sleep(700); // let the server bind before Chrome navigates
 
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run',
@@ -12,8 +20,8 @@ const chrome = spawn(CHROME, [
   'about:blank',
 ], { stdio: 'ignore' });
 
-const fail = m => { console.error('FAIL:', m); chrome.kill(); process.exit(1); };
-const ok = m => { console.log('PASS:', m); chrome.kill(); process.exit(0); };
+const fail = m => { console.error('FAIL:', m); chrome.kill(); srv.kill(); process.exit(1); };
+const ok = m => { console.log('PASS:', m); chrome.kill(); srv.kill(); process.exit(0); };
 
 try {
   // wait for devtools endpoint
@@ -48,7 +56,7 @@ try {
 
   await send('Page.enable');
   await send('Runtime.enable');
-  await send('Page.navigate', { url: 'http://localhost:8901/index.html' });
+  await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
   await sleep(2500);
 
   const boot = await evalJs(`(() => {

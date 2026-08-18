@@ -35,11 +35,13 @@ export class VehicleEditor {
     for (const def of this.componentsConfig) {
       const b = document.createElement('button');
       b.textContent = `${def.name}  ·  ${def.category}`;
-      b.onclick = () => {
-        this.placing = this.placing === def.id ? null : def.id;
-        palette.querySelectorAll('button').forEach(x => x.classList.remove('placing'));
-        if (this.placing) b.classList.add('placing');
-      };
+      // press-drag onto a snap node; plain click keeps toggle-placing mode
+      b.addEventListener('pointerdown', e => {
+        this.paletteDrag = { def, startX: e.clientX, startY: e.clientY, moved: false, pos: e };
+      });
+      b.addEventListener('click', () => {
+        this.setPlacing(this.placing === def.id ? null : def.id);
+      });
       palette.appendChild(b);
     }
 
@@ -51,14 +53,78 @@ export class VehicleEditor {
 
   bindCanvas() {
     this.canvas.addEventListener('mousemove', e => {
-      const p = this.toLocal(e);
-      this.hoverSnap = this.nearestSnap(p, 14);
+      if (!this.drag && !this.paletteDrag) {
+        this.hoverSnap = nearestSnapIndex(this.snapPoints(), this.toLocal(e), 16);
+      }
     });
+
+    // grab a placed component anywhere on its footprint (full element size)
+    this.canvas.addEventListener('mousedown', e => {
+      if (this.placing) return; // click handler handles placing mode
+      const c = this.hitComponent(this.toLocal(e));
+      if (c) {
+        // last-clicked element takes priority over overlapping ones -> move to front
+        const arr = this.state.vehicle.components;
+        arr.splice(arr.indexOf(c), 1);
+        arr.push(c);
+        this.drag = { c, moved: false, target: -1 };
+      }
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (this.paletteDrag) {
+        this.paletteDrag.moved = this.paletteDrag.moved ||
+          Math.hypot(e.clientX - this.paletteDrag.startX, e.clientY - this.paletteDrag.startY) > 4;
+        this.paletteDrag.pos = e;
+        return;
+      }
+      if (!this.drag) return;
+      const p = this.toLocal(e);
+      if (!this.drag.moved && Math.hypot(p.x - this.drag.c.local.x, p.y - this.drag.c.local.y) > 3) {
+        this.drag.moved = true;
+      }
+      if (this.drag.moved) {
+        // moving the component moves its wire endpoints too (wires reference it)
+        this.drag.c.local = { x: p.x, y: p.y };
+        this.drag.target = nearestSnapIndex(this.snapPoints(), p);
+      }
+    });
+
+    window.addEventListener('mouseup', e => {
+      if (this.paletteDrag) {
+        const d = this.paletteDrag;
+        this.paletteDrag = null;
+        if (d.moved) {
+          // dropped over the canvas near a node -> place; otherwise cancel.
+          // (no drag = plain click, handled by the button's own click event)
+          const r = this.canvas.getBoundingClientRect();
+          const over = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+          if (over) {
+            const idx = nearestSnapIndex(this.snapPoints(), this.toLocal(e), 34);
+            if (idx >= 0) this.placeComponent(d.def.id, idx);
+          }
+        }
+      }
+      if (this.drag) {
+        const d = this.drag;
+        this.drag = null;
+        this.dragConsumed = true; // suppress the follow-up click event
+        if (d.moved) this.snapInPlace(d.c, d.target);
+        this.selectedComp = d.c.id;
+        this.selectedWire = null;
+        this.refresh();
+      }
+    });
+
     this.canvas.addEventListener('click', e => {
+      if (this.dragConsumed) { this.dragConsumed = false; return; }
       const p = this.toLocal(e);
       if (this.placing) {
-        const idx = this.nearestSnap(p, 20);
-        if (idx >= 0) this.placeComponent(this.placing, idx);
+        const idx = nearestSnapIndex(this.snapPoints(), p, 45);
+        if (idx >= 0) {
+          this.placeComponent(this.placing, idx);
+          this.setPlacing(null); // one placement per click; drag-drop is the other mode
+        }
         return;
       }
       // select component or wire
@@ -81,27 +147,39 @@ export class VehicleEditor {
     });
   }
 
-  toLocal(e) {
-    const r = this.canvas.getBoundingClientRect();
-    return { x: e.clientX - r.left - r.width / 2, y: e.clientY - r.top - r.height / 2 };
+  setPlacing(type) {
+    this.placing = type;
+    this.ui.palette.querySelectorAll('button').forEach((b, i) =>
+      b.classList.toggle('placing', type === this.componentsConfig[i].id));
   }
 
-  nearestSnap(p, maxDist) {
-    let best = -1, bd = maxDist;
-    this.snapPoints().forEach((s, i) => {
-      const d = Math.hypot(s.x - p.x, s.y - p.y);
-      if (d < bd) { bd = d; best = i; }
-    });
-    return best;
+  _scale() { return this._viewScale || 1; }
+
+  toLocal(e) {
+    const r = this.canvas.getBoundingClientRect();
+    const s = this._scale();
+    return { x: (e.clientX - r.left - r.width / 2) / s, y: (e.clientY - r.top - r.height / 2) / s };
+  }
+
+  // snap a dragged component onto a node: center offset along the node normal
+  snapInPlace(c, idx) {
+    const def = this.compDef(c.type);
+    const snap = this.snapPoints()[idx];
+    const n = Math.hypot(snap.normalX, snap.normalY) || 1;
+    const off = (def?.size ?? 8) + 3;
+    c.snapIndex = idx;
+    c.local = { x: snap.x + (snap.normalX / n) * off, y: snap.y + (snap.normalY / n) * off };
+    if (def?.category === 'sensor') c.aimAngle = Math.atan2(snap.normalY, snap.normalX);
+    else c.localRotation = 0; // wheels roll along body forward
   }
 
   hitComponent(p) {
-    let best = null, bd = 14;
-    for (const c of this.state.vehicle.components) {
-      const d = Math.hypot(c.local.x - p.x, c.local.y - p.y);
-      if (d < bd) { bd = d; best = c; }
+    // topmost first: later in the array (and most recently clicked) wins
+    const arr = this.state.vehicle.components;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (componentHits(p, arr[i], this.compDef(arr[i].type))) return arr[i];
     }
-    return best;
+    return null;
   }
 
   hitWire(p) {
@@ -246,7 +324,8 @@ export class VehicleEditor {
     ctx.translate(cv.clientWidth / 2, cv.clientHeight / 2);
 
     const v = this.state.vehicle;
-    const scale = Math.min(cv.clientWidth / (v.body.width * 4), cv.clientHeight / (v.body.height * 6));
+    this._viewScale = Math.min(cv.clientWidth / (v.body.width * 4), cv.clientHeight / (v.body.height * 6));
+    const scale = this._viewScale;
     ctx.scale(scale, scale);
 
     // body
@@ -266,20 +345,37 @@ export class VehicleEditor {
     ctx.stroke();
     drawArrow(ctx, v.body.width / 2 + 4, 0, 0);
 
-    // snap points
+    // snap points (the drop target lights up while dragging)
+    const dragTarget = this.drag?.moved ? this.drag.target : -1;
     this.snapPoints().forEach((s, i) => {
       ctx.beginPath();
-      ctx.arc(s.x, s.y, i === this.hoverSnap ? 5 : 3, 0, Math.PI * 2);
-      ctx.fillStyle = i === this.hoverSnap ? '#4da3ff' : 'rgba(138,151,168,.7)';
+      ctx.arc(s.x, s.y, i === dragTarget ? 8 : i === this.hoverSnap ? 5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = i === dragTarget ? '#46d17a' : i === this.hoverSnap ? '#4da3ff' : 'rgba(138,151,168,.7)';
       ctx.fill();
+      if (i === dragTarget) {
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(this.drag.c.local.x, this.drag.c.local.y);
+        ctx.strokeStyle = 'rgba(70,209,122,.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
     });
 
-    // components
+    // components (wheels draw as top-down rects; sensors/mounts as circles)
     for (const c of v.components) {
       const def = this.compDef(c.type);
-      const r = def?.size ?? 8;
+      const s = componentSize(c, def);
       ctx.beginPath();
-      ctx.arc(c.local.x, c.local.y, r, 0, Math.PI * 2);
+      if (s.kind === 'rect') {
+        ctx.save();
+        ctx.translate(c.local.x, c.local.y);
+        ctx.rotate(c.localRotation ?? 0);
+        ctx.rect(-s.along / 2, -s.lateral / 2, s.along, s.lateral);
+        ctx.restore();
+      } else {
+        ctx.arc(c.local.x, c.local.y, s.radius, 0, Math.PI * 2);
+      }
       ctx.fillStyle =
         def?.category === 'actuator' ? '#35547a' :
         def?.category === 'sensor' ? '#2f6b46' : 'rgba(138,151,168,.6)';
@@ -289,7 +385,30 @@ export class VehicleEditor {
       ctx.stroke();
 
       if (typeof c.aimAngle === 'number') {
+        const r = s.kind === 'circle' ? s.radius : Math.max(s.along, s.lateral) / 2;
         drawArrow(ctx, c.local.x + Math.cos(c.aimAngle) * (r + 10), c.local.y + Math.sin(c.aimAngle) * (r + 10), c.aimAngle);
+      }
+    }
+
+    // palette drag ghost
+    if (this.paletteDrag?.moved) {
+      const def = this.paletteDrag.def;
+      const p = this.toLocal(this.paletteDrag.pos);
+      const r = this.canvas.getBoundingClientRect();
+      const over = this.paletteDrag.pos.clientX >= r.left && this.paletteDrag.pos.clientX <= r.right &&
+                   this.paletteDrag.pos.clientY >= r.top && this.paletteDrag.pos.clientY <= r.bottom;
+      if (over) {
+        const s = componentSize({ local: p, localRotation: 0 }, def);
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath();
+        if (s.kind === 'rect') {
+          ctx.rect(p.x - s.along / 2, p.y - s.lateral / 2, s.along, s.lateral);
+        } else {
+          ctx.arc(p.x, p.y, s.radius, 0, Math.PI * 2);
+        }
+        ctx.fillStyle = '#4da3ff';
+        ctx.fill();
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -340,3 +459,4 @@ function fillSelect(sel, items, label) {
 
 import { generateSnapPoints } from '../src/models/snapPoints.js';
 import { validateWiring } from '../src/models/wiring.js';
+import { componentSize, componentHits, nearestSnapIndex } from '../src/models/hitTest.js';

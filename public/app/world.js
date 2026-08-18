@@ -6,6 +6,7 @@
 import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation } from '../src/actuators.js';
+import { componentSize } from '../src/models/hitTest.js';
 
 // Matter.js is loaded as a classic script (public/vendor/matter.min.js)
 const M = globalThis.Matter;
@@ -489,8 +490,17 @@ export class WorldSim {
       for (const c of v.components) {
         if (!c.local) continue;
         const def = this.componentDef(c.type);
+        const s = componentSize(c, def);
         ctx.beginPath();
-        ctx.arc(c.local.x, c.local.y, def?.size ?? 8, 0, Math.PI * 2);
+        if (s.kind === 'rect') {
+          ctx.save();
+          ctx.translate(c.local.x, c.local.y);
+          ctx.rotate(c.localRotation ?? 0);
+          ctx.rect(-s.along / 2, -s.lateral / 2, s.along, s.lateral);
+          ctx.restore();
+        } else {
+          ctx.arc(c.local.x, c.local.y, s.radius, 0, Math.PI * 2);
+        }
         ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
         ctx.fill();
       }
