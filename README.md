@@ -17,13 +17,14 @@ No build step is required at runtime — vanilla ES modules + vendored Matter.js
 ## Test (TDD)
 
 ```bash
-npm test                                  # 59 unit tests (node --test, no framework)
+npm test                                  # 67 unit tests (node --test, no framework)
 node tests/smoke/world.sim.mjs            # headless Chrome: sim runs, vehicles move
-node tests/smoke/editor.ui.mjs            # headless Chrome: place + wire via UI
+node tests/smoke/editor.ui.mjs            # headless Chrome: place + drag-snap + wire via UI
 ```
 
-The smoke tests need `npm run serve` running and Google Chrome on PATH location
-used in the scripts (macOS path; adjust CHROME constant if needed).
+Smoke tests are self-contained (they start their own static server on 8901/8902)
+and need the Google Chrome at the CHROME constant in each script (macOS path;
+adjust if needed).
 
 ## Layout
 
@@ -33,6 +34,7 @@ src/                    testable core (pure ESM, no DOM)
   models/snapPoints.js    perimeter snap-point generation (corners always included)
   models/vehicle.js       pose math, component transform resolution
   models/wiring.js        wiring validation (duplicates, type mismatch, weight…)
+  models/hitTest.js       component footprints (wheel rects / sensor circles) + nearest snap
   sensors/light.js        inverse-square light sampling, range + saturation
   sensors/raycast.js      ray vs circle / rotated rect (pure geometry)
   simulation/sampleSensors.js   per-step sensor evaluation for a vehicle pose
@@ -54,7 +56,10 @@ owned prototype on save.
 
 Done:
 - Config-driven components/sensors/actuators, no hard-coded tunables
-- Snap-point body construction + component placement (click snap point)
+- Snap-point body construction + component placement: drag palette items onto
+  nodes (or click-place); drag placed components by their full footprint and they
+  snap to the nearest node on drop, sensors re-aim along the node normal, wires
+  follow; last-clicked element wins over overlaps; wheels render as top-down rects
 - Wiring editor with polarity/weight, live validation
 - World sim: lights (inverse-square), raycast distance sensors + beam viz,
   powered wheels, pan/zoom camera, element gizmo-style inspector, instance
@@ -62,7 +67,7 @@ Done:
 - Vehicle/world JSON import/export + localStorage recents
 
 Next (per PLAN.md):
-- Rotate handles for components in the editor; drag-along-snappoint repositioning
+- Rotate handles for components in the editor
 - Polygon world primitives (raycast + Matter already support them)
 - More Braitenberg vehicle presets (1–7)
 - Keyboard shortcut polish, camera collapse on play, recent-file thumbnails
