@@ -7,12 +7,12 @@ const wheelDef = { size: 16, category: 'actuator' };
 const sensor = { id: 's1', type: 'light_sensor', local: { x: 0, y: 0 }, localRotation: 0 };
 const sensorDef = { size: 8, category: 'sensor' };
 
-test('componentSize: actuator is a rect, short along travel axis, tall laterally', () => {
+test('componentSize: actuator is a rect, long along travel axis, short laterally', () => {
   const s = componentSize(wheel, wheelDef);
   assert.equal(s.kind, 'rect');
-  assert.ok(Math.abs(s.along - 16 * 0.9) < 1e-9);
-  assert.ok(Math.abs(s.lateral - 16 * 1.5) < 1e-9);
-  assert.ok(s.lateral > s.along);
+  assert.ok(Math.abs(s.along - 16 * 1.5) < 1e-9);
+  assert.ok(Math.abs(s.lateral - 16 * 0.9) < 1e-9);
+  assert.ok(s.along > s.lateral);
 });
 
 test('componentSize: sensor is a circle of radius = size', () => {
@@ -21,27 +21,28 @@ test('componentSize: sensor is a circle of radius = size', () => {
 });
 
 test('componentHits: wheel hit works anywhere on the rect (not just near center)', () => {
-  // near the corners/edges of the 14.4 x 24 rect at (40,0)
+  // near the corners/edges of the 24 x 14.4 rect at (40,0), travel along +x
   for (const p of [
-    { x: 40 - 7.1, y: -11.9 },
-    { x: 40 + 7.1, y: 11.9 },
-    { x: 40, y: 11.5 },   // edge, far from center (old 14px hit test still passes this one)
-    { x: 40, y: -11.5 },
+    { x: 40 - 11.5, y: -6.9 },
+    { x: 40 + 11.5, y: 6.9 },
+    { x: 40, y: 6.9 },   // lateral edge, far from center
+    { x: 40, y: -6.9 },
+    { x: 48, y: 0 },     // mid travel-axis, off center
   ]) assert.ok(componentHits(p, wheel, wheelDef), `expected hit at ${JSON.stringify(p)}`);
 });
 
 test('componentHits: just outside the rect misses', () => {
-  assert.ok(!componentHits({ x: 40, y: 12.5 }, wheel, wheelDef));
-  assert.ok(!componentHits({ x: 47.5, y: 0 }, wheel, wheelDef));
+  assert.ok(!componentHits({ x: 40, y: 7.6 }, wheel, wheelDef));   // past lateral edge (7.2)
+  assert.ok(!componentHits({ x: 53, y: 0 }, wheel, wheelDef));     // past travel edge (12)
   // far diagonal
   assert.ok(!componentHits({ x: 55, y: 0 }, wheel, wheelDef));
 });
 
 test('componentHits: rotated wheel frame follows localRotation', () => {
   const vert = { ...wheel, localRotation: Math.PI / 2 }; // travel along +y
-  // now long axis is along x
-  assert.ok(componentHits({ x: 40 + 11, y: 0 }, vert, wheelDef));
-  assert.ok(!componentHits({ x: 40, y: 12 }, vert, wheelDef));
+  // long axis is now along y (travel), short extent along x
+  assert.ok(componentHits({ x: 40, y: 11 }, vert, wheelDef));
+  assert.ok(!componentHits({ x: 53, y: 0 }, vert, wheelDef));
 });
 
 test('componentHits: circle sensors use radius hit', () => {

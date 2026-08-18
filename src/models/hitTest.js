@@ -5,13 +5,14 @@
 
 /**
  * Collision/draw footprint of a component in its own frame.
- * Actuators (wheels) are top-down rects: short along the travel axis
- * (localRotation), tall laterally. Everything else is a circle.
+ * Actuators (wheels) are top-down rects: long along the travel axis
+ * (localRotation, the tire footprint/diameter), short laterally (tread width).
+ * Everything else is a circle.
  */
 export function componentSize(c, def) {
   const size = def?.size ?? 8;
   if (def?.category === 'actuator' || def?.shape === 'rect') {
-    return { kind: 'rect', along: size * 0.9, lateral: size * 1.5 };
+    return { kind: 'rect', along: size * 1.5, lateral: size * 0.9 };
   }
   return { kind: 'circle', radius: size };
 }
