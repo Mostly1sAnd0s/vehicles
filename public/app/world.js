@@ -71,21 +71,41 @@ export class WorldSim {
   }
 
   syncInstances() {
-    // rebuild bodies from current vehicle doc (call after vehicle edits);
-    // does not touch running positions of existing instances
+    // Keep running instances in step with the current vehicle doc (call after
+    // any editor change). Wire maps refresh on every wiring change (cheap);
+    // physics bodies only rebuild when component geometry actually changed,
+    // preserving pose AND velocity so edits never stop a moving car.
     for (const inst of this.instances) {
-      if (inst.body) M.Composite.remove(this.engine.world, inst.body);
+      const v = this.prototypeVehicle(inst.protoId);
+      if (!v) continue;
+      const wireSig = JSON.stringify(v.wires ?? []);
+      if (wireSig !== inst.wireSig) {
+        inst.wireSig = wireSig;
+        this.instWireMap(inst);
+      }
+      const geoSig = JSON.stringify((v.components ?? []).map(c => [c.id, c.type, c.local?.x, c.local?.y]));
+      if (inst.body && geoSig === inst.geoSig) continue;
+      const old = inst.body;
+      if (old) M.Composite.remove(this.engine.world, old);
       inst.body = null;
-      this.instWireMap(inst);
       const body = this.makeInstanceBody(inst);
       if (!body) continue;
-      // new instances spawn at seed; existing keep their pose
-      if (!inst.hasSpawned) {
-        M.Body.setPosition(body, { x: inst.seed.x, y: inst.seed.y });
-        M.Body.setAngle(body, inst.seed.rotation);
+      if (old) {
+        // keep pose + momentum across the rebuild
+        M.Body.setPosition(body, old.position);
+        M.Body.setAngle(body, old.angle);
+        M.Body.setVelocity(body, old.velocity);
+        M.Body.setAngularVelocity(body, old.angularVelocity);
+      } else {
+        // new instances spawn at seed; existing keep their pose
+        if (!inst.hasSpawned) {
+          M.Body.setPosition(body, { x: inst.seed.x, y: inst.seed.y });
+          M.Body.setAngle(body, inst.seed.rotation);
+        }
       }
       inst.body = body;
       inst.hasSpawned = true;
+      inst.geoSig = geoSig;
       M.Composite.add(this.engine.world, body);
     }
   }

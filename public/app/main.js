@@ -110,6 +110,9 @@ async function main() {
   editor.hooks.onVehicleChanged = v => {
     const w = state.world.vehiclePrototypes.find(p => p === (state.vehicleOwner ?? null));
     if (w) w._vehicle = clone(v);
+    // keep any running sim in step with the edit (signature-guarded: wire
+    // maps refresh on wiring changes, bodies only on geometry changes)
+    worldSim?.syncInstances();
   };
 
   // ---------- file import/export ----------

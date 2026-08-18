@@ -73,33 +73,71 @@ try {
   if (boot.error) fail('boot: ' + boot.error);
   console.log('PASS: app booted', JSON.stringify(boot));
 
+  // Phase A: default (excitatory) wiring -> measure mean distance-to-light delta.
+  // Phase B: rewire both wires to Inhibitory through the editor UI; assert the
+  //          running sim's cached wire maps picked it up (regression: stale map).
+  // Phase C: inhibitory driving must invert the distance delta vs phase A.
   const result = await evalJs(`new Promise(resolve => {
-    const step = () => {
-      try {
-        const app = window.__app();
+    try {
+      const app = window.__app();
+      document.getElementById('tab-world').click();
+      const sim = app.worldSim;
+      if (!sim) return resolve({ error: 'worldSim not initialized' });
+      const sun = sim.state.world.elements.find(e => e.type === 'light');
+      const dists = () => sim.instances.map(i => Math.hypot(i.body.position.x - sun.position.x, i.body.position.y - sun.position.y));
+      const meanDelta = (a, b) => b.map((d, i) => d - a[i]).reduce((s, d) => s + d, 0) / b.length;
+
+      const d0 = dists();
+      document.getElementById('btn-play').click();
+      setTimeout(() => {
+        const d1 = dists();
+        const deltaA = meanDelta(d0, d1);
+        // pause, then rewire through the editor UI like a user would
+        document.getElementById('btn-play').click();
+        document.getElementById('tab-editor').click();
+        // delete wires one at a time: each removal rebuilds the list DOM
+        let del = document.querySelector('#wire-list li .del');
+        while (del) { del.click(); del = document.querySelector('#wire-list li .del'); }
+        for (const pair of [['sL', 'wL'], ['sR', 'wR']]) {
+          document.getElementById('wire-from').value = pair[0];
+          document.getElementById('wire-to').value = pair[1];
+          document.getElementById('wire-polarity').value = 'inhibitory';
+          document.getElementById('wire-weight-range').value = '1';
+          document.getElementById('add-wire').click();
+        }
+        const mapPol = (sim.instances[0].wireMap ?? {}).wL?.[0]?.wire.polarity ?? null;
+        const d2 = dists();
+        // resume with inhibitory wiring and measure again
         document.getElementById('tab-world').click();
-        const sim = app.worldSim;
-        if (!sim) return resolve({ error: 'worldSim not initialized' });
-        const sun = sim.state.world.elements.find(e => e.type === 'light');
-        const dists = () => sim.instances.map(i => Math.hypot(i.body.position.x - sun.position.x, i.body.position.y - sun.position.y));
-        const before = dists();
         document.getElementById('btn-play').click();
         setTimeout(() => {
-          const after = dists();
-          const finite = [...before, ...after].every(d => Number.isFinite(d));
-          const moved = after.some((d, i) => Math.abs(d - before[i]) > 1);
-          resolve({ before: before.map(Math.round), after: after.map(Math.round), finite, moved, count: sim.instances.length });
-        }, 6000);
-      } catch (e) { resolve({ error: e.message + ' | ' + e.stack }); }
-    };
-    setTimeout(step, 800);
+          const d3 = dists();
+          const deltaB = meanDelta(d2, d3);
+          const finite = [...d0, ...d1, ...d2, ...d3].every(d => Number.isFinite(d));
+          resolve({
+            count: sim.instances.length, finite,
+            deltaA: Math.round(deltaA), deltaB: Math.round(deltaB),
+            mapPol, editedPolaritys: app.state.vehicle.wires.map(w => w.polarity),
+          });
+        }, 4500);
+      }, 4500);
+    } catch (e) { resolve({ error: e.message + ' | ' + e.stack }); }
   })`);
 
   if (result.error) fail('sim: ' + result.error);
   if (!result.finite) fail('non-finite positions: ' + JSON.stringify(result));
   if (!result.count) fail('no instances');
-  if (!result.moved) fail(`instances did not move: ${JSON.stringify(result)}`);
-  ok(`simulation running: ${result.count} instances, distances ${JSON.stringify(result.before)} -> ${JSON.stringify(result.after)}`);
+  if (JSON.stringify(result.editedPolaritys) !== JSON.stringify(['inhibitory', 'inhibitory'])) {
+    fail('editor rewiring did not take effect: ' + JSON.stringify(result.editedPolaritys));
+  }
+  if (result.mapPol !== 'inhibitory') fail('runtime wire map is stale after editor rewire (got ' + result.mapPol + ')');
+  if (Math.abs(result.deltaA) < 5 || Math.abs(result.deltaB) < 5) {
+    fail(`not enough motion to compare polarity (${JSON.stringify(result)})`);
+  }
+  if (Math.sign(result.deltaA) === Math.sign(result.deltaB)) {
+    fail(`polarity did not invert behavior: deltaA=${result.deltaA} deltaB=${result.deltaB}`);
+  }
+  ok(`simulation + polarity: ${result.count} instances, excitatory dΔ=${result.deltaA} -> inhibitory dΔ=${result.deltaB}`);
 } catch (e) {
   fail(e.stack ?? String(e));
 }
