@@ -15,6 +15,10 @@ await new Promise(r => freePort.on('exit', r));
 const srv = spawn('python3', ['-m', 'http.server', String(WEB), '--directory', 'public'], { stdio: 'ignore' });
 await sleep(700); // let the server bind before Chrome navigates
 
+// kill a leftover headless Chrome from a previous run (profile lock breaks boot)
+const freeChrome = spawn('sh', ['-c', "pkill -f 'user-data-dir=/tmp/bv-profile4' 2>/dev/null; true"], { stdio: 'ignore' });
+await new Promise(r => freeChrome.on('exit', r));
+
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run',
   `--remote-debugging-port=${PORT}`, '--user-data-dir=/tmp/bv-profile4',

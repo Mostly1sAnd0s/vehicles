@@ -4,8 +4,8 @@
   "name": "Sun Car (Vehicle 2)",
   "body": { "shape": "rect", "width": 80, "height": 40 },
   "components": [
-    { "id": "wL", "type": "powered_wheel", "local": { "x": -40, "y": -6.7 }, "localRotation": 0, "props": {} },
-    { "id": "wR", "type": "powered_wheel", "local": { "x": -40, "y": 6.7 }, "localRotation": 0, "props": {} },
+    { "id": "wL", "type": "powered_wheel", "local": { "x": -13.3, "y": -39 }, "localRotation": 0, "props": {} },
+    { "id": "wR", "type": "powered_wheel", "local": { "x": -13.3, "y": 39 }, "localRotation": 0, "props": {} },
     { "id": "sL", "type": "light_sensor", "local": { "x": 40, "y": -6.7 }, "aimAngle": 0, "props": { "range": 900 } },
     { "id": "sR", "type": "light_sensor", "local": { "x": 40, "y": 6.7 }, "aimAngle": 0, "props": { "range": 900 } }
   ],

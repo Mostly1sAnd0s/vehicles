@@ -58,7 +58,11 @@ const server = http.createServer(async (req, res) => {
     const file = path.normalize(path.join(ROOT, urlPath));
     if (!file.startsWith(ROOT)) { res.writeHead(403); res.end('forbidden'); return; }
     const body = await readFile(file);
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' });
+    res.writeHead(200, {
+      'content-type': MIME[path.extname(file)] ?? 'application/octet-stream',
+      // dev server: never serve stale ES modules from heuristic cache
+      'cache-control': 'no-store',
+    });
     res.end(body);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain' });
