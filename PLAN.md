@@ -195,10 +195,86 @@ Sharing is via import/export of these JSON files. Manual drag-and-drop file hand
 
 This plan provides a modular, config-driven foundation for Vehicles 1-7 simulation with clear paths for extension.
 
-## Future Work (parked, not yet implemented)
+## Status (updated after sensor/motor tuning session)
 
-### Per-motor rotation direction
-Wire polarity currently only scales/inverts the *signal* into `computeActuation` (`src/actuators.js`). The physical spin direction of a motor relative to that signal is implicit. It should be an explicit, adjustable parameter per actuator — e.g. a `direction: 'cw' | 'ccw'` property on the component instance (or `actuators.json`) that multiplies the final force by its own sign. This decouples "how the sensor drives the motor" from "which way the motor turns." Note the current symptom this addresses: with inhibitory polarity the relationship is correct but wheels visually rotate the "wrong" way.
+### Implemented
+- Light sensing normalized linearly in *distance* (`lightLevelNormalized`): a dim source responds from a real range with no near-source cliff; inverse-square physics still sets the sensing window (radius = min(range, sqrt(I/T)), full scale at sqrt(I/F)). Replaces the old level-linear map that made one polarity look "less sensitive" and only fired near a source.
+- Per-sensor FOV + wedge beams: each light sensor has `fov` (default 2 pi / omni) and `aimAngle`; beam drawn as a true triangular wedge whose length = effective sensing radius. Ghost-range fallback removed - no more misleading ring when nothing is in view.
+- On-body telemetry ("Values:" toggle): per-robot x/y, per-sensor level to output + distance-to-light, per-wheel signed force.
+- Per-wheel tuning on the motor element: `motorPower` (gain) and `friction` (mapped to Matter `frictionAir` drag; 0 = ice, 1 = grippy), with live inspector sliders and config defaults (`applyMotorPower`, `wheelFrictionAir`, unit-tested).
+- Power curves in `computeActuation`: `linear` (default) and `sqrt` are now selectable in `config/actuators.json`.
+- Per-motor polarity (forward/reverse) is editable in the inspector via `actuatorPolaritySign` - resolves the old "inhibitory wheel spins the wrong way" symptom.
 
-### Motor-response scripting layer
-A lightweight scripting/condition language so a user can define how motor output responds to sensor input — thresholds, dead-bands, saturation points, and conditional branches (e.g. "if light > 0.6 then full speed; if 0.2 < light < 0.6 then half; else stopped"). This generalizes the linear `value × weight × polarity` model into a configurable response curve / decision table evaluated per actuator each step. Design should keep `computeActuation` as the single seam so both simple and scripted responses share the same clamping and force pipeline.
+### Still parked
+- Explicit cw/ccw *visual spin* direction per actuator, fully decoupled from force sign. Per-motor polarity now covers most of this; a dedicated render-direction param is a small nicety, not required for Vehicles 1-5.
+- Motor-response scripting / decision-table layer: thresholds, dead-bands, and conditional branches ("if light > 0.6 then full speed...") to generalize the `value x weight x polarity x powerCurve` model for Vehicles 6/7. Keep `computeActuation` as the single seam so simple and scripted responses share the same clamping + force pipeline.
+
+## Next Up — Session Handoff (start fresh session, read this + relevant files)
+
+State is committed & pushed (`74404d7`, `main`). Three features to build next, all in the
+live UI layer (`public/app/` + `config/`) following existing patterns. TDD where pure logic
+is involved; verify each with the headless smoke probes (see below) and `npm test`.
+
+### 1. Multiple vehicle types (CRUD) — currently only "Vehicle A"
+- Data: `worldDoc.vehiclePrototypes` = array of `{ id, name, instances:[seed...], vehicle|_vehicle }`
+  (loaded from `public/worlds/light-field.json`). `renderPrototypes()` in `public/app/world.js`
+  renders one `.proto-block` per prototype (count input + Add Here/Random/Line/Grid/Edit).
+- Add: an "Add Vehicle" button (above the proto list) that pushes a new prototype. Name = next
+  unused "Vehicle X" (A, B, C...); clone a blank/default vehicle (`blankVehicle()` or clone
+  Vehicle A's doc) and spawn a few instances via existing `ensureCount(proto, n)`.
+- Remove: a "Remove" button per `.proto-block` (confirm). Must drop that prototype's running
+  instances: filter `this.instances` by `protoId`, `M.Composite.remove(world, inst.body)` for
+  each, then remove from `vehiclePrototypes` and re-render. Reuse the removal logic already in
+  the count-decrement path (~`world.js` lines 401–418).
+- Naming helper: compute next letter not already used; keep ids unique (`proto_<rand>`).
+
+### 2. Drag a running robot to reposition it (like lights/rocks/walls)
+- Element drag pattern is in `public/app/world.js` `bindCanvas()` (~lines 212–238):
+  `mousedown` → `toWorld(e)`, `mousemove` moves the grabbed thing, `mouseup` clears.
+- Add an instance-drag branch: on `mousedown`, hit-test `this.instances` for one whose body is
+  near the click (distance from `inst.body.position` < max(body half-width, ~20px) * zoom-adjusted).
+  If found, set `this.dragInstance = inst`. On `mousemove`: `M.Body.setPosition(inst.body, worldPt)`
+  AND `M.Body.setVelocity(inst.body, {x:0,y:0})` + zero angular velocity so it doesn't fling.
+  On `mouseup`: clear. Make sure instance-drag takes precedence over / is checked before element
+  selection so clicking a robot doesn't also grab an element behind it.
+- Note: while playing, the sim keeps stepping; either pause during drag or just keep setting
+  position each mousemove (setting position wins per-frame). Simplest correct approach: set
+  position + zero velocity in the mousemove handler; works whether paused or playing.
+
+### 3. "Paths:" toggle + per-vehicle body color
+- Toggle button: add `<button id="btn-paths">Paths: off</button>` next to `btn-values`
+  (`public/index.html` line ~69). Bind in `main.js` ui list (add `btnPaths`) and handler in
+  `world.js` next to the `btnValues` onclick (~line 259): `this.paths = !this.paths; btnPaths.textContent`.
+- Recording: in `step()` while playing, push `{x, y}` of each `inst.body.position` onto
+  `inst.path` (init `[]` on instance creation). Cap length (e.g. keep last ~2000 points; shift
+  when exceeded) so long runs don't grow unbounded. Clear `inst.path = []` on `reset()`.
+- Rendering: in `draw()` (after bodies, gated by `if (this.paths)`), stroke a polyline through
+  each instance's `inst.path` using the vehicle's body color with alpha ~0.5 and lineWidth ~2.
+- Body color as a vehicle option:
+  - Data: add `color` to the vehicle `body` object: `{ width, height, color }`. Default
+    `#4da3ff` (current hardcoded stroke). Each prototype gets its own default; new "Add Vehicle"
+    can cycle a palette so types are visually distinct.
+  - Editor UI: in `public/app/editor.js` inspector, add a vehicle-level row (shown when no
+    component is selected, or always) with `<input type="color" id="ins-body-color">` bound to
+    `v.body.color` + `this.refresh()`.
+  - World render: replace hardcoded body fill/stroke in the instances draw loop (~line 518+) —
+    currently `fillStyle '#2b3a52'`, `strokeStyle '#4da3ff'` — with `v.body?.color ?? '#4da3ff'`
+    for the stroke (keep a dark fill, or derive it), so the drawn body and its path share color.
+
+### Verification harness (headless Chrome/CDP, no server changes)
+- `npm test` → `tests/*.test.js` (node --test). Add pure-logic tests if any feature has a
+  non-trivial function (e.g. "next unused vehicle name").
+- `npm run smoke` → `tests/smoke/editor.ui.mjs` + `world.sim.mjs` (spins headless Chrome,
+  `window.__app()` exposes `{ state, worldSim }`). Pattern: navigate to index.html, click
+  `#tab-world`, drive via DOM (buttons/inputs), assert on `worldSim.instances` / vehicle docs.
+- For drag + paths you can assert programmatically: set an instance position via a CDP
+  evaluate (simulate mousedown/move/up on `world-canvas`, or call the handler), then check
+  `inst.body.position` moved and `inst.path.length` grew over a few stepped frames while playing.
+- Leftover-Chrome gotcha: these probes share a profile dir; stale headless processes cause
+  "devtools not reachable". `pkill -f remote-debugging-port` and `rm -rf <profile>` before reruns.
+
+### Current defaults (tuned, do not regress)
+- `config/actuators.json`: `defaultMotorPower: 0.1`, `defaultFriction: 0.5`, `powerCurve: linear`.
+- `config/sensors.json` light: `detectionThreshold: 0.02`, `fullScaleRatio: 16`.
+- On-body readouts (Values toggle) show x/y, per-sensor level→output + distance-to-light,
+  per-wheel signed force. Light beam = true sensing radius only (ghost-range fallback removed).
