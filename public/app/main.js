@@ -5,6 +5,7 @@
 
 import { VehicleEditor } from './editor.js';
 import { WorldSim } from './world.js';
+import { blankVehicle } from './prototypes.js';
 
 const $ = id => document.getElementById(id);
 
@@ -88,6 +89,7 @@ async function main() {
       timescaleVal: $('timescale-val'),
       btnBeams: $('btn-beams'),
       btnValues: $('btn-values'),
+      addVehicle: $('add-vehicle'),
       prototypes: $('prototypes'),
       worldInspector: $('world-inspector'),
     }, state, {
@@ -201,17 +203,6 @@ async function main() {
 }
 
 function clone(x) { return JSON.parse(JSON.stringify(x)); }
-
-function blankVehicle() {
-  return {
-    schemaVersion: 1,
-    id: 'my-vehicle',
-    name: 'New Vehicle',
-    body: { shape: 'rect', width: 80, height: 40 },
-    components: [],
-    wires: [],
-  };
-}
 
 function blankWorld() {
   return {

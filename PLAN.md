@@ -204,6 +204,7 @@ This plan provides a modular, config-driven foundation for Vehicles 1-7 simulati
 - Per-wheel tuning on the motor element: `motorPower` (gain) and `friction` (mapped to Matter `frictionAir` drag; 0 = ice, 1 = grippy), with live inspector sliders and config defaults (`applyMotorPower`, `wheelFrictionAir`, unit-tested).
 - Power curves in `computeActuation`: `linear` (default) and `sqrt` are now selectable in `config/actuators.json`.
 - Per-motor polarity (forward/reverse) is editable in the inspector via `actuatorPolaritySign` - resolves the old "inhibitory wheel spins the wrong way" symptom.
+- Multiple vehicle types (CRUD): "+ Add Vehicle" button above the proto list and a per-block "Remove" button (confirm-guarded). Pure helpers in `public/app/prototypes.js` (`nextVehicleName`, `makePrototype`, `removePrototype`, `blankVehicle`; unit-tested in `tests/prototypes.test.js`); `WorldSim.addVehicle` / `removeVehicle` / `dropInstancesOf` wire them to the physics world. New types clone an existing prototype's vehicle (fallback `blankVehicle`) and spawn 3 instances via `ensureCount`. Removed the latent cross-prototype bug in the `ensureCount` decrement path that could drop other types' instances. Verified end-to-end by `npm run smoke:crud`.
 
 ### Still parked
 - Explicit cw/ccw *visual spin* direction per actuator, fully decoupled from force sign. Per-motor polarity now covers most of this; a dedicated render-direction param is a small nicety, not required for Vehicles 1-5.
@@ -215,7 +216,7 @@ State is committed & pushed (`74404d7`, `main`). Three features to build next, a
 live UI layer (`public/app/` + `config/`) following existing patterns. TDD where pure logic
 is involved; verify each with the headless smoke probes (see below) and `npm test`.
 
-### 1. Multiple vehicle types (CRUD) — currently only "Vehicle A"
+### 1. Multiple vehicle types (CRUD) — DONE (see Status/Implemented above; `npm run smoke:crud`)
 - Data: `worldDoc.vehiclePrototypes` = array of `{ id, name, instances:[seed...], vehicle|_vehicle }`
   (loaded from `public/worlds/light-field.json`). `renderPrototypes()` in `public/app/world.js`
   renders one `.proto-block` per prototype (count input + Add Here/Random/Line/Grid/Edit).

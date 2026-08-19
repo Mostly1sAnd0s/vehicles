@@ -94,6 +94,7 @@ ul.plain, #placed-list, #wire-list { list-style: none; margin: 0; padding: 0; }
 .proto-block h4 { margin: 0 0 6px; font-size: 13px; display: flex; justify-content: space-between; }
 .proto-block .row { display: flex; gap: 4px; margin-top: 5px; align-items: center; }
 .proto-block .row button { padding: 2px 6px; font-size: 11px; }
+button.danger { color: #ff9d9d; border-color: #7a3040; }
 #recent-select, #topbar > button { font-size: 12px; }
 
 .kbd-hint { color: var(--dim); font-size: 11px; margin-top: 8px; white-space: pre-line; }
