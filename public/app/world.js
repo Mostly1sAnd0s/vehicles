@@ -6,7 +6,7 @@
 import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
-import { componentSize } from '../src/models/hitTest.js';
+import { findInstanceAt } from '../src/models/hitTest.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype } from './prototypes.js';
@@ -214,6 +214,12 @@ export class WorldSim {
     let drag = null;
     this.canvas.addEventListener('mousedown', e => {
       const w = this.toWorld(e);
+      // instance drag takes precedence: a robot on top of an element gets grabbed first
+      const inst = findInstanceAt(this.instances, pid => this.prototypeVehicle(pid), w, this.view.zoom);
+      if (inst) {
+        drag = { mode: 'instance', inst };
+        return;
+      }
       const el = this.hitElement(w);
       if (el) {
         this.selectedElement = el.id;
@@ -233,12 +239,24 @@ export class WorldSim {
         drag.el.position.y = drag.started.y + (w.y - drag.mouse.y);
         this.buildObstacles();
         this.renderInspector();
+      } else if (drag.mode === 'instance') {
+        // setting position each move wins per-frame; zero momentum so it doesn't fling
+        const w = this.toWorld(e);
+        M_BodySetPosition(this.M, drag.inst.body, w);
+        M.Body.setVelocity(drag.inst.body, { x: 0, y: 0 });
+        M.Body.setAngularVelocity(drag.inst.body, 0);
       } else {
         this.view.x = drag.view0.x - (e.clientX - drag.e0.x) / this.view.zoom;
         this.view.y = drag.view0.y - (e.clientY - drag.e0.y) / this.view.zoom;
       }
     });
-    window.addEventListener('mouseup', () => { drag = null; });
+    window.addEventListener('mouseup', () => {
+      if (drag?.mode === 'instance' && drag.inst.body) {
+        // adopt the dropped pose as the seed so Reset restores it
+        drag.inst.seed = { x: drag.inst.body.position.x, y: drag.inst.body.position.y, rotation: drag.inst.body.angle };
+      }
+      drag = null;
+    });
     this.canvas.addEventListener('wheel', e => {
       e.preventDefault();
       const before = this.toWorld(e);

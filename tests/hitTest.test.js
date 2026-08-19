@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { componentSize, componentHits, nearestSnapIndex } from '../src/models/hitTest.js';
+import { componentSize, componentHits, nearestSnapIndex, instanceHitRadius, findInstanceAt } from '../src/models/hitTest.js';
 
 const wheel = { id: 'w1', type: 'powered_wheel', local: { x: 40, y: 0 }, localRotation: 0 };
 const wheelDef = { size: 16, category: 'actuator' };
@@ -65,4 +65,46 @@ test('nearestSnapIndex respects maxDist and returns -1 when none close enough', 
   const snaps = [{ x: 100, y: 100, normalX: 0, normalY: 0 }];
   assert.equal(nearestSnapIndex(snaps, { x: 0, y: 0 }, 50), -1);
   assert.equal(nearestSnapIndex(snaps, { x: 0, y: 0 }), 0); // no limit -> nearest anyway
+});
+
+// ---------------- world instance drag hit-test ----------------
+
+test('instanceHitRadius uses max(body half-extent, 20px) plus zoom-adjusted slack', () => {
+  const v = { body: { width: 80, height: 40 } };
+  // 40 (half-width) > 20 -> radius base 40; slack 6 at zoom 1
+  assert.ok(Math.abs(instanceHitRadius(v, 1) - 46) < 1e-9);
+  // tiny body -> floored to 20
+  assert.ok(Math.abs(instanceHitRadius({ body: { width: 4, height: 4 } }, 1) - 26) < 1e-9);
+  // zooming in shrinks the slack (world units), base unchanged
+  assert.ok(instanceHitRadius(v, 2) < instanceHitRadius(v, 1));
+});
+
+test('findInstanceAt returns the nearest instance within tolerance, or null', () => {
+  const insts = [
+    { id: 'a', protoId: 'p', body: { position: { x: 0, y: 0 } } },
+    { id: 'b', protoId: 'p', body: { position: { x: 100, y: 0 } } },
+    { id: 'c', protoId: 'p', body: { position: { x: 500, y: 500 } } },
+  ];
+  const vehicleOf = () => ({ body: { width: 80, height: 40 } });
+  assert.equal(findInstanceAt(insts, vehicleOf, { x: 5, y: 0 }).id, 'a');
+  assert.equal(findInstanceAt(insts, vehicleOf, { x: 95, y: 5 }).id, 'b');
+  assert.equal(findInstanceAt(insts, vehicleOf, { x: 300, y: 300 }), null); // beyond every grab radius
+});
+
+test('findInstanceAt prefers the closer body when two overlap the point', () => {
+  const insts = [
+    { id: 'far', protoId: 'p', body: { position: { x: 40, y: 0 } } },
+    { id: 'near', protoId: 'p', body: { position: { x: 30, y: 0 } } },
+  ];
+  const vehicleOf = () => ({ body: { width: 80, height: 40 } });
+  assert.equal(findInstanceAt(insts, vehicleOf, { x: 31, y: 0 }).id, 'near');
+});
+
+test('findInstanceAt skips instances without a live body', () => {
+  const insts = [
+    { id: 'nobody', protoId: 'p', body: null },
+    { id: 'live', protoId: 'p', body: { position: { x: 0, y: 0 } } },
+  ];
+  const vehicleOf = () => ({ body: { width: 80, height: 40 } });
+  assert.equal(findInstanceAt(insts, vehicleOf, { x: 0, y: 0 }).id, 'live');
 });

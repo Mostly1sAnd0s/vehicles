@@ -204,6 +204,7 @@ This plan provides a modular, config-driven foundation for Vehicles 1-7 simulati
 - Per-wheel tuning on the motor element: `motorPower` (gain) and `friction` (mapped to Matter `frictionAir` drag; 0 = ice, 1 = grippy), with live inspector sliders and config defaults (`applyMotorPower`, `wheelFrictionAir`, unit-tested).
 - Power curves in `computeActuation`: `linear` (default) and `sqrt` are now selectable in `config/actuators.json`.
 - Per-motor polarity (forward/reverse) is editable in the inspector via `actuatorPolaritySign` - resolves the old "inhibitory wheel spins the wrong way" symptom.
+- Drag a running robot: canvas mousedown hit-tests instances *before* elements (nearest body within `max(body half-extent, 20px) + 6/zoom`), drag repositions via `Body.setPosition` with velocity + angular velocity zeroed each move; releasing adopts the dropped pose as that instance's seed (Reset returns there). Pure helpers `instanceHitRadius` / `findInstanceAt` in `src/models/hitTest.js` (unit-tested, injected `vehicleOf` callback keeps them DOM-free); e2e in `tests/smoke/proto.crud.mjs`.
 - Multiple vehicle types (CRUD): "+ Add Vehicle" button above the proto list and a per-block "Remove" button (confirm-guarded). Pure helpers in `public/app/prototypes.js` (`nextVehicleName`, `makePrototype`, `removePrototype`, `blankVehicle`; unit-tested in `tests/prototypes.test.js`); `WorldSim.addVehicle` / `removeVehicle` / `dropInstancesOf` wire them to the physics world. New types clone an existing prototype's vehicle (fallback `blankVehicle`) and spawn 3 instances via `ensureCount`. Removed the latent cross-prototype bug in the `ensureCount` decrement path that could drop other types' instances. Verified end-to-end by `npm run smoke:crud`.
 
 ### Still parked
@@ -212,7 +213,7 @@ This plan provides a modular, config-driven foundation for Vehicles 1-7 simulati
 
 ## Next Up — Session Handoff (start fresh session, read this + relevant files)
 
-State is committed & pushed (`74404d7`, `main`). Three features to build next, all in the
+State is committed & pushed to `main`. Features to build next, all in the
 live UI layer (`public/app/` + `config/`) following existing patterns. TDD where pure logic
 is involved; verify each with the headless smoke probes (see below) and `npm test`.
 
@@ -229,7 +230,7 @@ is involved; verify each with the headless smoke probes (see below) and `npm tes
   the count-decrement path (~`world.js` lines 401–418).
 - Naming helper: compute next letter not already used; keep ids unique (`proto_<rand>`).
 
-### 2. Drag a running robot to reposition it (like lights/rocks/walls)
+### 2. Drag a running robot to reposition it (like lights/rocks/walls) - DONE (see Status/Implemented; e2e in `npm run smoke:crud`, unit in `npm test`)
 - Element drag pattern is in `public/app/world.js` `bindCanvas()` (~lines 212–238):
   `mousedown` → `toWorld(e)`, `mousemove` moves the grabbed thing, `mouseup` clears.
 - Add an instance-drag branch: on `mousedown`, hit-test `this.instances` for one whose body is
@@ -241,6 +242,8 @@ is involved; verify each with the headless smoke probes (see below) and `npm tes
 - Note: while playing, the sim keeps stepping; either pause during drag or just keep setting
   position each mousemove (setting position wins per-frame). Simplest correct approach: set
   position + zero velocity in the mousemove handler; works whether paused or playing.
+- [x] All done; verified with 3 consecutive full `npm run smoke` passes.
+- NOTE (ops): headless Chrome on this machine intermittently STALLS module loading for tens of seconds right after first paint (renderer scheduling quirk, not an app bug - server logs show all resources served immediately). Smoke probes now absorb it: 45x500ms boot wait, `Page.navigate` retry up to 2x when the wait times out (`RENAV:` log line), focus emulation + 1.5s pre-nav settle. Don't "fix" this by shortening waits.
 
 ### 3. "Paths:" toggle + per-vehicle body color
 - Toggle button: add `<button id="btn-paths">Paths: off</button>` next to `btn-values`
@@ -263,6 +266,7 @@ is involved; verify each with the headless smoke probes (see below) and `npm tes
     for the stroke (keep a dark fill, or derive it), so the drawn body and its path share color.
 
 ### Verification harness (headless Chrome/CDP, no server changes)
+- Probes drive headless Chrome via raw CDP WebSocket (`--remote-debugging-port`, no puppeteer). Boot wait: 45x500ms for `window.__app`; on timeout it logs BOOT-DIAG (readyState, `<pre>` text, 4xx resources, re-import of main.js) and re-navigates up to 2x to absorb intermittent headless renderer stalls (see NOTE in item 2).
 - `npm test` → `tests/*.test.js` (node --test). Add pure-logic tests if any feature has a
   non-trivial function (e.g. "next unused vehicle name").
 - `npm run smoke` → `tests/smoke/editor.ui.mjs` + `world.sim.mjs` (spins headless Chrome,
@@ -271,8 +275,7 @@ is involved; verify each with the headless smoke probes (see below) and `npm tes
 - For drag + paths you can assert programmatically: set an instance position via a CDP
   evaluate (simulate mousedown/move/up on `world-canvas`, or call the handler), then check
   `inst.body.position` moved and `inst.path.length` grew over a few stepped frames while playing.
-- Leftover-Chrome gotcha: these probes share a profile dir; stale headless processes cause
-  "devtools not reachable". `pkill -f remote-debugging-port` and `rm -rf <profile>` before reruns.
+- Leftover-Chrome gotcha: stale headless processes cause "devtools not reachable". Each probe now owns its own port + profile dir (`bv-profile-{editor,world,crud}` on 8901-8903) and pkills only its own before launching; probes also SIGKILL their own chrome/server on exit.
 
 ### Current defaults (tuned, do not regress)
 - `config/actuators.json`: `defaultMotorPower: 0.1`, `defaultFriction: 0.5`, `powerCurve: linear`.

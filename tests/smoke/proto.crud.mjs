@@ -10,7 +10,7 @@ const WEB = 8903;
 
 const freePort = spawn('sh', ['-c', `lsof -ti:${WEB} | xargs kill 2>/dev/null; true`], { stdio: 'ignore' });
 await new Promise(r => freePort.on('exit', r));
-const srv = spawn('python3', ['-m', 'http.server', String(WEB), '--directory', 'public'], { stdio: 'ignore' });
+const srv = spawn('sh', ['-c', `python3 -m http.server ${WEB} --directory public > /tmp/bv-srv-${WEB}.log 2>&1`], { stdio: 'ignore' });
 await sleep(700);
 
 const freeChrome = spawn('sh', ['-c', "pkill -f 'user-data-dir=/tmp/bv-profile-crud' 2>/dev/null; true"], { stdio: 'ignore' });
@@ -21,8 +21,8 @@ const chrome = spawn(CHROME, [
   'about:blank',
 ], { stdio: 'ignore' });
 
-const fail = m => { console.error('FAIL:', m); chrome.kill(); srv.kill(); process.exit(1); };
-const ok = m => { console.log('PASS:', m); chrome.kill(); srv.kill(); process.exit(0); };
+const fail = m => { console.error('FAIL:', m); chrome.kill('SIGKILL'); srv.kill('SIGKILL'); process.exit(1); };
+const ok = m => { console.log('PASS:', m); chrome.kill('SIGKILL'); srv.kill('SIGKILL'); process.exit(0); };
 
 try {
   let targets;
@@ -54,8 +54,29 @@ try {
     return out.result?.value;
   };
 
+    await send('Network.enable');
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
   await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
-  await sleep(1500);
+  const navUrl = `http://localhost:${WEB}/index.html`;
+  let navCount = 0;
+  for (let i = 0; i < 90; i++) { // 45s budget: poll for boot, re-navigate if the renderer stalls
+    const probe = await evalJs(`typeof window.__app`).catch(() => 'eval-error');
+    if (probe === 'function') break;
+    if (i > 0 && i % 30 === 0 && navCount < 2) {
+      navCount++;
+      console.log('RENAV: renderer stalled, re-navigating (' + navCount + '/2)');
+      await send('Page.navigate', { url: navUrl });
+    }
+    if (i === 89) { try {
+        const diagBase = await evalJs(`(async () => {
+          let reimport;
+          try { reimport = await import('./app/main.js').then(() => 'module-ok'); } catch (e) { reimport = 'ERR: ' + String(e && e.message || e).slice(0, 200); }
+          return JSON.stringify({ url: location.href, ready: document.readyState, pre: document.querySelector('pre')?.textContent?.slice(0,200) ?? null, res404: performance.getEntriesByType('resource').filter(r => r.responseStatus >= 400).map(r => r.name + '=' + r.responseStatus), allRes: performance.getEntriesByType('resource').length, reimport });
+        })()`);
+        console.log('BOOT-DIAG:', diagBase);
+      } catch (e) { console.log('BOOT-DIAG failed:', e.message); } }
+    await sleep(500);
+  }
 
   const boot = await evalJs(`
     (async () => {
@@ -128,6 +149,42 @@ try {
   if (del.blocks !== 2) fail('remove: expected 2 proto-blocks, got ' + del.blocks);
   if (del.removeBtns < 2) fail('remove: expected Remove buttons per proto-block, got ' + del.removeBtns);
 
+  // --- DRAG a running robot to reposition it (synthetic mouse on the canvas) ---
+  const dragRes = await evalJs(`
+    (() => {
+      const { worldSim: sim } = window.__app();
+      const cv = document.getElementById('world-canvas');
+      const rect = cv.getBoundingClientRect();
+      const toScreen = p => ({
+        x: (p.x - sim.view.x) * sim.view.zoom + rect.left + rect.width / 2,
+        y: (p.y - sim.view.y) * sim.view.zoom + rect.top + rect.height / 2,
+      });
+      const fire = (type, target, x, y) =>
+        target.dispatchEvent(new MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+      const inst = sim.instances[0];
+      const b = inst.body;
+      const start = { x: b.position.x, y: b.position.y };
+      const target = { x: start.x + 250, y: start.y - 150 };
+      let s = toScreen(start);
+      fire('mousedown', cv, s.x, s.y);
+      s = toScreen(target);
+      fire('mousemove', window, s.x, s.y);
+      fire('mouseup', window);
+      const after = { x: b.position.x, y: b.position.y };
+      // Reset must restore the dropped pose (seed adopted on mouseup)
+      document.getElementById('btn-reset').click();
+      const resetPos = { x: b.position.x, y: b.position.y };
+      return {
+        moved: Math.hypot(after.x - target.x, after.y - target.y) < 2,
+        zeroV: b.velocity.x === 0 && b.velocity.y === 0 && b.angularVelocity === 0,
+        seedOk: Math.hypot(resetPos.x - target.x, resetPos.y - target.y) < 2,
+      };
+    })()
+  `);
+  if (!dragRes.moved) fail('drag: instance did not follow the mouse to the target point');
+  if (!dragRes.zeroV) fail('drag: momentum not zeroed on drop (robot would fling away)');
+  if (!dragRes.seedOk) fail('drag: Reset did not restore the dropped pose (seed not adopted)');
+
   // --- REMOVE vetoed by confirm() leaves everything intact ---
   const veto = await evalJs(`
     (() => {
@@ -145,7 +202,7 @@ try {
   `);
   if (!veto.sameN || !veto.sameI) fail('veto: confirm()=false must leave doc + instances untouched ' + JSON.stringify(veto));
 
-  ok('proto CRUD: add names B/C with live bodies; remove drops only target type; veto intact');
+  ok('proto CRUD + robot drag: add B/C; remove drops only target; drag repositions (zero momentum, seed adopted); veto intact');
 
 } catch (err) {
   fail(err.message ?? String(err));

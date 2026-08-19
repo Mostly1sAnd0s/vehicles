@@ -32,6 +32,30 @@ export function componentHits(point, c, def) {
   return Math.abs(lx) <= s.along / 2 && Math.abs(ly) <= s.lateral / 2;
 }
 
+/**
+ * World-space grab radius for a vehicle instance: max(body half-extent, 20px)
+ * plus a small zoom-adjusted slack so tiny cars stay grabbable when zoomed out.
+ */
+export function instanceHitRadius(v, zoom = 1) {
+  const base = Math.max((v?.body?.width ?? 40) / 2, (v?.body?.height ?? 40) / 2, 20);
+  return base + 6 / zoom;
+}
+
+/**
+ * Nearest live instance whose body is within its grab radius of world point.
+ * vehicleOf(protoId) is injected so this stays pure and testable.
+ */
+export function findInstanceAt(instances, vehicleOf, point, zoom = 1) {
+  let best = null, bestD = Infinity;
+  for (const inst of instances) {
+    if (!inst?.body?.position) continue;
+    const r = instanceHitRadius(vehicleOf(inst.protoId), zoom);
+    const d = Math.hypot(point.x - inst.body.position.x, point.y - inst.body.position.y);
+    if (d <= r && d < bestD) { bestD = d; best = inst; }
+  }
+  return best;
+}
+
 /** Index of the closest snap point, or -1 if farther than maxDist. */
 export function nearestSnapIndex(snapPoints, point, maxDist = Infinity) {
   let best = -1;

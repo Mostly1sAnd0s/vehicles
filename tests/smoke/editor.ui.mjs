@@ -12,7 +12,7 @@ const WEB = 8901;
 const freePort = spawn('sh', ['-c', `lsof -ti:${WEB} | xargs kill 2>/dev/null; true`], { stdio: 'ignore' });
 await new Promise(r => freePort.on('exit', r));
 
-const srv = spawn('python3', ['-m', 'http.server', String(WEB), '--directory', 'public'], { stdio: 'ignore' });
+const srv = spawn('sh', ['-c', `python3 -m http.server ${WEB} --directory public > /tmp/bv-srv-${WEB}.log 2>&1`], { stdio: 'ignore' });
 await sleep(700); // let the server bind before Chrome navigates
 
 // kill a leftover headless Chrome from a previous run (profile lock breaks boot)
@@ -25,8 +25,8 @@ const chrome = spawn(CHROME, [
   'about:blank',
 ], { stdio: 'ignore' });
 
-const fail = m => { console.error('FAIL:', m); chrome.kill(); srv.kill(); process.exit(1); };
-const ok = m => { console.log('PASS:', m); chrome.kill(); srv.kill(); process.exit(0); };
+const fail = m => { console.error('FAIL:', m); chrome.kill('SIGKILL'); srv.kill('SIGKILL'); process.exit(1); };
+const ok = m => { console.log('PASS:', m); chrome.kill('SIGKILL'); srv.kill('SIGKILL'); process.exit(0); };
 
 try {
   let targets;
@@ -57,10 +57,30 @@ try {
 
   await send('Page.enable');
   await send('Runtime.enable');
+  await send('Network.enable');
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
+
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  await sleep(1500); // let the renderer settle before navigating (headless can stall module loads otherwise)
   await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
-  for (let i = 0; i < 30; i++) {
+  const navUrl = `http://localhost:${WEB}/index.html`;
+  let navCount = 0;
+  for (let i = 0; i < 90; i++) { // 45s budget: poll for boot, re-navigate if the renderer stalls
     const probe = await evalJs(`typeof window.__app`).catch(() => 'eval-error');
     if (probe === 'function') break;
+    if (i > 0 && i % 30 === 0 && navCount < 2) {
+      navCount++;
+      console.log('RENAV: renderer stalled, re-navigating (' + navCount + '/2)');
+      await send('Page.navigate', { url: navUrl });
+    }
+    if (i === 89) { try {
+        const diagBase = await evalJs(`(async () => {
+          let reimport;
+          try { reimport = await import('./app/main.js').then(() => 'module-ok'); } catch (e) { reimport = 'ERR: ' + String(e && e.message || e).slice(0, 200); }
+          return JSON.stringify({ url: location.href, ready: document.readyState, pre: document.querySelector('pre')?.textContent?.slice(0,200) ?? null, res404: performance.getEntriesByType('resource').filter(r => r.responseStatus >= 400).map(r => r.name + '=' + r.responseStatus), allRes: performance.getEntriesByType('resource').length, reimport });
+        })()`);
+        console.log('BOOT-DIAG:', diagBase);
+      } catch (e) { console.log('BOOT-DIAG failed:', e.message); } }
     await sleep(500);
   }
   const bootInfo = await evalJs(`JSON.stringify({ ready: document.readyState, title: document.title, app: typeof window.__app, url: location.href, pre: document.querySelector('pre')?.textContent?.slice(0,300) ?? null })`).catch(e => 'probe failed: ' + e.message);
