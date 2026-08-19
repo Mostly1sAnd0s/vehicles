@@ -237,7 +237,6 @@ export class VehicleEditor {
       id: `wire_${Date.now().toString(36)}`,
       from: { componentId: fromId, port: 'out' },
       to: { componentId: toId, port: 'drive' },
-      polarity: this.ui.wirePolarity.value,
       weight: Number(this.ui.wireWeightRange.value),
     });
     this.refresh();
@@ -270,7 +269,7 @@ export class VehicleEditor {
     v.wires.forEach((w, i) => {
       const li = document.createElement('li');
       if (i === this.selectedWire) li.classList.add('sel');
-      li.innerHTML = `<span>${w.from.componentId} → ${w.to.componentId} (${w.polarity[0]} ${w.weight})</span><button class="del">✕</button>`;
+      li.innerHTML = `<span>${w.from.componentId} → ${w.to.componentId} ×${w.weight}</span><button class="del">✕</button>`;
       li.onclick = () => { this.selectedWire = i; this.refresh(); };
       li.querySelector('.del').onclick = e => { e.stopPropagation(); v.wires.splice(i, 1); this.selectedWire = null; this.refresh(); };
       wl.appendChild(li);
@@ -290,16 +289,64 @@ export class VehicleEditor {
     const box = this.ui.inspector;
     const c = this.selectedComp ? this.comp(this.selectedComp) : null;
     if (!c) { box.innerHTML = ''; return; }
-    box.innerHTML = `<h3>Selected</h3>`;
+
+    // Build the whole panel as one string and assign innerHTML ONCE, then bind
+    // handlers. (Incremental `box.innerHTML += …` replaces the DOM each time
+    // and silently drops any event handler bound to an earlier node — this is
+    // what used to clobber the Range input's onchange.)
+    let html = `<h3>Selected</h3>`;
     if (typeof c.aimAngle === 'number') {
-      box.innerHTML += `<label>Aim (rad) <input type="number" id="ins-aim" step="0.1" value="${c.aimAngle.toFixed(2)}"></label>`;
-      box.querySelector('#ins-aim').onchange = e => { c.aimAngle = Number(e.target.value); this.refresh(); };
+      html += `<label>Aim (rad) <input type="number" id="ins-aim" step="0.1" value="${c.aimAngle.toFixed(2)}"></label>`;
     }
-    const rangeDef = this.compDef(c.type)?.defaults?.range;
     if (typeof c.props?.range === 'number') {
-      box.innerHTML += `<label>Range <input type="number" id="ins-range" value="${c.props.range}"></label>`;
-      box.querySelector('#ins-range').onchange = e => { c.props.range = Number(e.target.value); this.refresh(); };
+      html += `<label>Range <input type="number" id="ins-range" min="1" value="${c.props.range}"></label>`;
     }
+    if (c.type === 'light_sensor') {
+      const fovDefault = this.state.configs?.sensors?.light?.fov ?? 2 * Math.PI;
+      const fovRad = c.props?.fov ?? fovDefault;
+      html += `<label>FOV (&deg;) <input type="number" id="ins-fov" min="0" max="360" step="5" value="${Math.round(fovRad * 180 / Math.PI)}"></label>`;
+      const lightCfg = this.state.configs?.sensors?.light ?? {};
+      const thresh = c.props?.threshold ?? lightCfg.detectionThreshold ?? 0.02;
+      html += `<label>Threshold <input type="number" id="ins-thresh" min="0.001" step="0.005" value="${thresh}"></label>`;
+      html += `<div class="hint">reach &asymp; &radic;(intensity / threshold) &mdash; lower to sense from farther</div>`;
+    }
+    if (c.type === 'powered_wheel') {
+      const aCfg = this.state.configs.actuators?.powered_wheel ?? {};
+      const mp = c.props?.motorPower ?? aCfg.defaultMotorPower ?? 1;
+      const fr = c.props?.friction ?? aCfg.defaultFriction ?? 0.5;
+      html += `<label>Motor power <input type="range" id="ins-mp" min="0" max="3" step="0.05" value="${mp}"> <span id="ins-mp-v">${(+mp).toFixed(2)}</span></label>`;
+      html += `<label>Wheel friction <input type="range" id="ins-fr" min="0" max="1" step="0.05" value="${fr}"> <span id="ins-fr-v">${(+fr).toFixed(2)}</span></label>`;
+      html += `<div class="hint">more power = faster; more friction = grip &amp; less coasting (0 = ice)</div>`;
+    }
+    const cat = this.compDef(c.type)?.category;
+    if (cat === 'sensor' || cat === 'actuator') {
+      const opts = cat === 'sensor'
+        ? [['normal', 'Normal'], ['inverted', 'Inverted']]
+        : [['forward', 'Forward'], ['reverse', 'Reverse']];
+      const cur = c.polarity ?? (cat === 'sensor' ? 'normal' : this.state.configs.actuators[c.type]?.defaultPolarity ?? 'forward');
+      html += `<label>${cat === 'sensor' ? 'Sensor polarity' : 'Motor polarity'} <select id="ins-pol">
+          ${opts.map(([v, l]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${l}</option>`).join('')}
+        </select></label>`;
+    }
+    box.innerHTML = html;
+
+    // Now bind — every control still exists because the DOM wasn't rebuilt.
+    box.querySelector('#ins-aim')?.addEventListener('change', e => { c.aimAngle = Number(e.target.value); this.refresh(); });
+    box.querySelector('#ins-range')?.addEventListener('change', e => { c.props.range = Math.max(1, Number(e.target.value) || 1); this.refresh(); });
+    box.querySelector('#ins-fov')?.addEventListener('change', e => { c.props.fov = (Math.min(360, Math.max(0, Number(e.target.value) || 0))) * Math.PI / 180; this.refresh(); });
+    box.querySelector('#ins-thresh')?.addEventListener('change', e => { c.props.threshold = Math.max(0.001, Number(e.target.value) || 0.001); this.refresh(); });
+    box.querySelector('#ins-pol')?.addEventListener('change', e => { c.polarity = e.target.value; this.refresh(); });
+    const mpEl = box.querySelector('#ins-mp');
+    if (mpEl) {
+      mpEl.addEventListener('input', e => { c.props.motorPower = Number(e.target.value); box.querySelector('#ins-mp-v').textContent = (+e.target.value).toFixed(2); });
+      mpEl.addEventListener('change', () => this.refresh());
+    }
+    const frEl = box.querySelector('#ins-fr');
+    if (frEl) {
+      frEl.addEventListener('input', e => { c.props.friction = Number(e.target.value); box.querySelector('#ins-fr-v').textContent = (+e.target.value).toFixed(2); });
+      frEl.addEventListener('change', () => this.refresh());
+    }
+
   }
 
   // ---------- drawing ----------
@@ -376,10 +423,12 @@ export class VehicleEditor {
       } else {
         ctx.arc(c.local.x, c.local.y, s.radius, 0, Math.PI * 2);
       }
-      ctx.fillStyle =
-        def?.category === 'actuator' ? '#35547a' :
-        def?.category === 'sensor' ? '#2f6b46' : 'rgba(138,151,168,.6)';
-      if (c.id === this.selectedComp) ctx.strokeStyle = '#ffffff'; else ctx.strokeStyle = '#10141a';
+      // inverted sensors / reverse motors are tinted red (was the wire polarity color)
+      const inverted = c.polarity === 'inverted' || c.polarity === 'reverse';
+      ctx.fillStyle = inverted ? '#6e2b3a'
+        : def?.category === 'actuator' ? '#35547a'
+        : def?.category === 'sensor' ? '#2f6b46' : 'rgba(138,151,168,.6)';
+      if (c.id === this.selectedComp) ctx.strokeStyle = '#ffffff'; else ctx.strokeStyle = inverted ? '#ff5d5d' : '#10141a';
       ctx.lineWidth = 2;
       ctx.fill();
       ctx.stroke();
@@ -412,7 +461,7 @@ export class VehicleEditor {
       }
     }
 
-    // wires: arcing lines, green excitatory / red inhibitory
+    // wires: arcing lines (polarity now lives on the components)
     for (const w of v.wires) {
       const a = this.comp(w.from.componentId)?.local;
       const b = this.comp(w.to.componentId)?.local;
@@ -421,7 +470,7 @@ export class VehicleEditor {
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.quadraticCurveTo(mx, my, b.x, b.y);
-      ctx.strokeStyle = w.polarity === 'excitatory' ? '#46d17a' : '#ff5d5d';
+      ctx.strokeStyle = '#7d94ad';
       ctx.lineWidth = 3 * (0.5 + 0.5 * w.weight);
       ctx.globalAlpha = this.selectedWire !== null && w.id ? true : 0.9;
       ctx.stroke();

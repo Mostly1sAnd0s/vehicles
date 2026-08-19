@@ -7,6 +7,6 @@
     "snapPointCount": 12,
     "timeScale": 1.0,
     "fixedTimestepMs": 16.6667,
-    "thrustScale": 0.001
+    "thrustScale": 0.02
   }
 }

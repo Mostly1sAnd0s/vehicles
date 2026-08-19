@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "powered_wheel": {
     "maxForce": 1.0,
-    "powerCurve": "linear"
+    "powerCurve": "linear",
+    "defaultPolarity": "forward",
+    "defaultMotorPower": 0.1,
+    "defaultFriction": 0.5,
+    "frictionAirBase": 0.001,
+    "frictionAirScale": 0.2
   }
 }

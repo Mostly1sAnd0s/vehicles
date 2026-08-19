@@ -5,7 +5,7 @@
 
 import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
-import { computeActuation } from '../src/actuators.js';
+import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
 import { componentSize } from '../src/models/hitTest.js';
 
 // Matter.js is loaded as a classic script (public/vendor/matter.min.js)
@@ -26,6 +26,7 @@ export class WorldSim {
     this.instances = [];          // {id, protoId, body, seed:{x,y,rotation}}
     this.obstacleBodies = [];
     this.lastSamples = [];        // for beam drawing (per instance)
+    this.showValues = true;       // on-body sensor/motor readouts
     this.acc = 0;
     this.lastT = performance.now();
 
@@ -128,8 +129,22 @@ export class WorldSim {
   }
 
   // ---------------- simulation step ----------------
+  // per-wheel grip -> top-down drag on each composite body; reads the
+  // current wheel friction props every tick so inspector tuning applies at once.
+  applyWheelFriction(inst) {
+    const v = this.prototypeVehicle(inst.protoId);
+    const cfg = this.state.configs.actuators?.powered_wheel ?? {};
+    const wheels = (v?.components ?? []).filter(c => this.componentDef(c.type)?.category === 'actuator' && c.local);
+    let f = cfg.defaultFriction ?? 0.5;
+    if (wheels.length) {
+      f = wheels.reduce((sum, c) => sum + (c.props?.friction ?? cfg.defaultFriction ?? 0.5), 0) / wheels.length;
+    }
+    inst.body.frictionAir = wheelFrictionAir(f, cfg);
+  }
+
   step() {
     const M = this.M;
+    for (const inst of this.instances) if (inst.body) this.applyWheelFriction(inst);
     M.Engine.update(this.engine, this.dtMs);
 
     const snapshot = worldElementsToSnapshot(this.worldDoc.elements);
@@ -145,12 +160,16 @@ export class WorldSim {
       allSamples.push(...samples.map(s => ({ ...s, instanceId: inst.id })));
 
       const sensorValue = id => samples.find(s => s.componentId === id)?.value ?? 0;
+      inst.lastMotors = []; // per-wheel signed force (for on-body readout)
       for (const c of v.components) {
         if (!c.local || this.componentDef(c.type)?.category !== 'actuator') continue;
         const feeders = inst.wireMap[c.id];
-        if (!feeders?.length) continue;
         let force = 0;
-        for (const f of feeders) force += computeActuation(sensorValue(f.sensorId), [f.wire], actCfg);
+        for (const f of feeders ?? []) force += computeActuation(sensorValue(f.sensorId), [f.wire], actCfg);
+        force *= actuatorPolaritySign(c.polarity, actCfg); // per-motor forward/reverse
+        force = applyMotorPower(force, c.props?.motorPower ?? actCfg.defaultMotorPower);
+        inst.lastMotors.push({ id: c.id, local: { ...c.local }, force });
+        if (!feeders?.length) continue;
         const dir = pose.angle + (c.localRotation ?? 0);
         const fx = Math.cos(dir) * force * thrustScale;
         const fy = Math.sin(dir) * force * thrustScale;
@@ -257,6 +276,10 @@ export class WorldSim {
     this.ui.btnBeams.onclick = () => {
       this.beams = !this.beams;
       this.ui.btnBeams.textContent = `Beams: ${this.beams ? 'on' : 'off'}`;
+    };
+    this.ui.btnValues.onclick = () => {
+      this.showValues = !this.showValues;
+      this.ui.btnValues.textContent = `Values: ${this.showValues ? 'on' : 'off'}`;
     };
 
     const kb = this.state.configs.ui.keybindings ?? {};
@@ -527,17 +550,108 @@ export class WorldSim {
       ctx.restore();
     }
 
+    // on-body readouts: sensor level→output per sensor, signed force per wheel (upright)
+    if (this.showValues) {
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      for (const inst of this.instances) {
+        const v = this.prototypeVehicle(inst.protoId);
+        if (!v || !inst.body) continue;
+        const a = inst.body.angle;
+        const toWorld = l => ({ x: inst.body.position.x + Math.cos(a) * l.x - Math.sin(a) * l.y,
+                                y: inst.body.position.y + Math.sin(a) * l.x + Math.cos(a) * l.y });
+        const label = (x, y, text, color) => {
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+          ctx.strokeText(text, x, y);
+          ctx.fillStyle = color;
+          ctx.fillText(text, x, y);
+        };
+        // world X/Y above the body (centered-ish), for distance-to-light comparison
+        label(inst.body.position.x - 34, inst.body.position.y - ((v.body?.height ?? 40) / 2 + 12),
+              `x ${Math.round(inst.body.position.x)}  y ${Math.round(inst.body.position.y)}`, '#e8f0ff');
+        for (const s of inst.lastSamples ?? []) {
+          const comp = v.components.find(c => c.id === s.componentId);
+          if (!comp?.local) continue;
+          const p = toWorld(comp.local);
+          let txt;
+          if (comp.type.startsWith('light') && s.lightLevel !== undefined) {
+            const dTxt = s.lightDistance != null ? ` d\u2248${Math.round(s.lightDistance)}` : '';
+            txt = `L ${s.lightLevel.toFixed(2)}\u2192${s.value.toFixed(2)}${dTxt}`;
+          } else {
+            txt = `${comp.type.startsWith('distance') ? 'D' : '?'} ${s.value.toFixed(2)}`;
+          }
+          label(p.x + 8, p.y - 9, txt, '#ffd479');
+        }
+        for (const m of inst.lastMotors ?? []) {
+          const p = toWorld(m.local);
+          const txt = m.force < 0 ? `M -${Math.abs(m.force).toFixed(2)}` : `M +${m.force.toFixed(2)}`;
+          label(p.x + 8, p.y + 9, txt, m.force < 0 ? '#ff9d9d' : '#9ad0ff');
+        }
+      }
+    }
+
     // sensor beams
     if (this.beams) {
       for (const s of this.lastSamples) {
-        const range = this.prototypeVehicle(this.instances.find(i => i.id === s.instanceId)?.protoId)
+        const isLight = s.effectiveRange !== undefined;
+        let length;
+        let level;
+        if (isLight) {
+          // Light sensor: a wedge (triangle) whose aperture IS the sensor FOV
+          // and whose length IS its sensitivity. Brightness tracks the detected
+          // light level; when no light is in view it still shows the FOV shape
+          // faintly at full range so you can see what the sensor "looks" at.
+          // The beam IS the sensor's actual current sensing radius
+          // (effectiveRange = min(thresholdRadius, range)). We do NOT fall back
+          // to the configured range when nothing is in view: that used to draw
+          // a large faint ghost ring that looked like a sensing radius but
+          // wasn't — real sensing begins at this radius. When nothing is within
+          // range we just mark the sensor's position with a small dot.
+          const fov = (s.fov === undefined || !Number.isFinite(s.fov)) ? 2 * Math.PI : s.fov;
+          const lvl = Math.min(Math.max(s.lightLevel ?? 0, 0), 1);
+          const reach = s.effectiveRange ?? 0;
+          const sx = s.samplePoint.x, sy = s.samplePoint.y;
+          if (reach <= 0) {
+            ctx.beginPath();
+            ctx.arc(sx, sy, 3, 0, 2 * Math.PI);
+            ctx.strokeStyle = 'rgba(255,180,90,0.25)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            continue;
+          }
+          const half = Math.min(fov / 2, Math.PI);
+          const alpha = 0.06 + 0.8 * lvl;
+          ctx.beginPath();
+          if (half >= Math.PI - 1e-3) {
+            ctx.arc(sx, sy, reach, 0, 2 * Math.PI); // omni: full circle
+          } else {
+            const a1 = s.direction - half, a2 = s.direction + half;
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(sx + Math.cos(a1) * reach, sy + Math.sin(a1) * reach);
+            ctx.arc(sx, sy, reach, a1, a2); // edge -> arc -> other edge = wedge
+          }
+          ctx.closePath();
+          ctx.fillStyle = `rgba(255,180,90,${(alpha * 0.22).toFixed(3)})`;
+          ctx.fill();
+          ctx.strokeStyle = `rgba(255,180,90,${alpha.toFixed(3)})`;
+          ctx.lineWidth = 1 + 1.5 * lvl;
+          ctx.stroke();
+          continue;
+        }
+
+        // Distance sensor: thin full-range ray.
+        length = this.prototypeVehicle(this.instances.find(i => i.id === s.instanceId)?.protoId)
           ?.components.find(c => c.id === s.componentId)?.props?.range ?? 150;
-        const end = { x: s.samplePoint.x + Math.cos(s.direction) * range,
-                      y: s.samplePoint.y + Math.sin(s.direction) * range };
+        level = 1;
+        if (length <= 0) continue;
+        const end = { x: s.samplePoint.x + Math.cos(s.direction) * length,
+                      y: s.samplePoint.y + Math.sin(s.direction) * length };
         ctx.beginPath();
         ctx.moveTo(s.samplePoint.x, s.samplePoint.y);
         ctx.lineTo(end.x, end.y);
-        ctx.strokeStyle = s.value > 0 ? 'rgba(255,180,90,.8)' : 'rgba(138,151,168,.25)';
+        ctx.strokeStyle = `rgba(140,200,255,${0.35.toFixed(3)})`;
         ctx.lineWidth = 1;
         ctx.stroke();
       }

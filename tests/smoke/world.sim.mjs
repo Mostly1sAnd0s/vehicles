@@ -43,7 +43,7 @@ try {
   const pending = new Map();
   ws.onmessage = e => {
     const msg = JSON.parse(e.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg.result ?? {}); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
   };
   const send = (method, params = {}) => new Promise(res => {
     const mid = ++id;
@@ -53,9 +53,11 @@ try {
   await new Promise(r => ws.onopen = r);
 
   const evalJs = async (expression) => {
-    const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-    if (r.exceptionDetails) throw new Error('page exception: ' + JSON.stringify(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text));
-    return r.result?.value;
+    const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, timeout: 60000 });
+    if (r.error) throw new Error('CDP error: ' + JSON.stringify(r.error));
+    const out = r.result ?? {};
+    if (out.exceptionDetails) throw new Error('page exception: ' + JSON.stringify(out.exceptionDetails.exception?.description ?? out.exceptionDetails.text));
+    return out.result?.value;
   };
 
   await send('Page.enable');
@@ -73,10 +75,12 @@ try {
   if (boot.error) fail('boot: ' + boot.error);
   console.log('PASS: app booted', JSON.stringify(boot));
 
-  // Phase A: default (excitatory) wiring -> measure mean distance-to-light delta.
-  // Phase B: rewire both wires to Inhibitory through the editor UI; assert the
-  //          running sim's cached wire maps picked it up (regression: stale map).
-  // Phase C: inhibitory driving must invert the distance delta vs phase A.
+  // Phase A: normal sensor polarity -> measure mean distance-to-light delta.
+  // Phase B: invert both light sensors through the editor inspector (#ins-pol);
+  //          assert the edit persisted on the vehicle prototype and the inverted
+  //          output = 1 - normalized (exact complement of the normal polarity).
+  // Phase C: inverted sensors must flip the distance delta vs phase A.
+  // Phase D: motor polarity forward/reverse must flip thrust direction.
   const result = await evalJs(`new Promise(resolve => {
     try {
       const app = window.__app();
@@ -86,40 +90,77 @@ try {
       const sun = sim.state.world.elements.find(e => e.type === 'light');
       const dists = () => sim.instances.map(i => Math.hypot(i.body.position.x - sun.position.x, i.body.position.y - sun.position.y));
       const meanDelta = (a, b) => b.map((d, i) => d - a[i]).reduce((s, d) => s + d, 0) / b.length;
+      const sLval = () => {
+        const inst = sim.instances[0];
+        return (inst.lastSamples ?? []).find(s => s.componentId === 'sL')?.value;
+      };
+      const selectComp = id => [...document.querySelectorAll('#placed-list li')]
+        .find(li => li.textContent.startsWith(id + ' '))?.click();
 
+      // ---- phase A: normal polarity, run briefly ----
       const d0 = dists();
       document.getElementById('btn-play').click();
-      setTimeout(() => {
+      setTimeout(() => { try {
         const d1 = dists();
         const deltaA = meanDelta(d0, d1);
-        // pause, then rewire through the editor UI like a user would
+        const rawS = sLval();
+        // pause; invert both light sensors through the editor inspector
         document.getElementById('btn-play').click();
         document.getElementById('tab-editor').click();
-        // delete wires one at a time: each removal rebuilds the list DOM
-        let del = document.querySelector('#wire-list li .del');
-        while (del) { del.click(); del = document.querySelector('#wire-list li .del'); }
-        for (const pair of [['sL', 'wL'], ['sR', 'wR']]) {
-          document.getElementById('wire-from').value = pair[0];
-          document.getElementById('wire-to').value = pair[1];
-          document.getElementById('wire-polarity').value = 'inhibitory';
-          document.getElementById('wire-weight-range').value = '1';
-          document.getElementById('add-wire').click();
+        for (const id of ['sL', 'sR']) {
+          selectComp(id);
+          const sel = document.getElementById('ins-pol');
+          if (!sel) return resolve({ error: 'inspector missing polarity control for ' + id });
+          sel.value = 'inverted';
+          sel.dispatchEvent(new Event('change'));
         }
-        const mapPol = (sim.instances[0].wireMap ?? {}).wL?.[0]?.wire.polarity ?? null;
-        const d2 = dists();
-        // resume with inhibitory wiring and measure again
+        // one step refreshes samples; inverted output must equal 1 - normalized
+        // (exact complement of the normal polarity under threshold normalization)
         document.getElementById('tab-world').click();
+        document.getElementById('btn-step').click();
+        const invS = sLval();
+        const lightCfg = sim.state.configs.sensors.light;
+        const protoV = app.state.world.vehiclePrototypes[0]._vehicle;
+        const sensorPol = protoV.components.filter(c => c.type === 'light_sensor').map(c => c.polarity);
+        const d2 = dists();
+        // ---- phase B: run with inverted sensors (shorter: thrust is ~100x) ----
         document.getElementById('btn-play').click();
-        setTimeout(() => {
+        setTimeout(() => { try {
           const d3 = dists();
           const deltaB = meanDelta(d2, d3);
           const finite = [...d0, ...d1, ...d2, ...d3].every(d => Number.isFinite(d));
+          // ---- phase D: motor polarity (UI + runtime) ----
+          document.getElementById('btn-play').click(); // pause
+          document.getElementById('tab-editor').click();
+          selectComp('wL');
+          const msel = document.getElementById('ins-pol');
+          if (!msel) return resolve({ error: 'inspector missing motor polarity control' });
+          msel.value = 'reverse';
+          msel.dispatchEvent(new Event('change'));
+          const live = app.state.world.vehiclePrototypes[0]._vehicle; // hook clones on every refresh
+          const motorPol = live.components.find(c => c.id === 'wL').polarity;
+          document.getElementById('tab-world').click();
+          // Measure the applied actuation force directly (step() does
+          // Engine.update THEN applyForce, so after one step body.force holds
+          // the polarity-scaled thrust). Force projection on heading flips sign
+          // with motor polarity, independent of integration lag / collisions.
+          const probe = dir => {
+            for (const c of live.components) if (c.type === 'powered_wheel') c.polarity = dir;
+            document.getElementById('btn-step').click();
+            const b = sim.instances[0].body;
+            const h = { x: Math.cos(b.angle), y: Math.sin(b.angle) };
+            return b.force.x * h.x + b.force.y * h.y; // signed thrust along heading
+          };
+          const pF = probe('forward');
+          const pR = probe('reverse');
           resolve({
             count: sim.instances.length, finite,
             deltaA: Math.round(deltaA), deltaB: Math.round(deltaB),
-            mapPol, editedPolaritys: app.state.vehicle.wires.map(w => w.polarity),
+            rawS, invS, T: lightCfg.detectionThreshold, K: lightCfg.fullScaleRatio, sensorPol, motorPol, pF, pR,
           });
-        }, 4500);
+        } catch (e) { resolve({ error: 'innerB: ' + String(e.stack || e).slice(0, 400) }); }
+        }, 3000);
+      } catch (e) { resolve({ error: 'innerA: ' + String(e.stack || e).slice(0, 400) }); }
       }, 4500);
     } catch (e) { resolve({ error: e.message + ' | ' + e.stack }); }
   })`);
@@ -127,17 +168,30 @@ try {
   if (result.error) fail('sim: ' + result.error);
   if (!result.finite) fail('non-finite positions: ' + JSON.stringify(result));
   if (!result.count) fail('no instances');
-  if (JSON.stringify(result.editedPolaritys) !== JSON.stringify(['inhibitory', 'inhibitory'])) {
-    fail('editor rewiring did not take effect: ' + JSON.stringify(result.editedPolaritys));
+  if (JSON.stringify(result.sensorPol) !== JSON.stringify(['inverted', 'inverted'])) {
+    fail('sensor polarity edits were not persisted: ' + JSON.stringify(result.sensorPol));
   }
-  if (result.mapPol !== 'inhibitory') fail('runtime wire map is stale after editor rewire (got ' + result.mapPol + ')');
-  if (Math.abs(result.deltaA) < 5 || Math.abs(result.deltaB) < 5) {
-    fail(`not enough motion to compare polarity (${JSON.stringify(result)})`);
+  if (!Number.isFinite(result.rawS) || !Number.isFinite(result.invS)) {
+    fail('sensor sample values non-finite: ' + JSON.stringify(result));
   }
-  if (Math.sign(result.deltaA) === Math.sign(result.deltaB)) {
-    fail(`polarity did not invert behavior: deltaA=${result.deltaA} deltaB=${result.deltaB}`);
+  // Under threshold normalization, inverted is the exact complement of normal.
+  if (Math.abs(result.invS + result.rawS - 1) > 0.05) {
+    fail(`inverted sensor not complement of normal: norm=${result.rawS} inv=${result.invS}`);
   }
-  ok(`simulation + polarity: ${result.count} instances, excitatory dΔ=${result.deltaA} -> inhibitory dΔ=${result.deltaB}`);
+  // inverted sensors are active in the dark: the car must move far more than
+  // with normal polarity (which is barely driven at this light level)
+  if (Math.abs(result.deltaB) < 50 || Math.abs(result.deltaB) < 5 * Math.abs(result.deltaA)) {
+    fail(`sensor polarity did not change behavior enough: deltaA=${result.deltaA} deltaB=${result.deltaB}`);
+  }
+  if (result.motorPol !== 'reverse') fail('motor polarity edit was not persisted: ' + result.motorPol);
+  if (!Number.isFinite(result.pF) || !Number.isFinite(result.pR)) fail('motor probe non-finite: ' + JSON.stringify(result));
+  if (Math.abs(result.pF) < 1e-6 || Math.abs(result.pR) < 1e-6) {
+    fail(`motor probe too small to compare (no sensor drive?): pF=${result.pF} pR=${result.pR}`);
+  }
+  if (Math.sign(result.pF) === Math.sign(result.pR)) {
+    fail(`motor polarity did not invert thrust: forward=${result.pF} reverse=${result.pR}`);
+  }
+  ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}`);
 } catch (e) {
   fail(e.stack ?? String(e));
 }

@@ -35,7 +35,8 @@ src/                    testable core (pure ESM, no DOM)
   models/vehicle.js       pose math, component transform resolution
   models/wiring.js        wiring validation (duplicates, type mismatch, weight…)
   models/hitTest.js       component footprints (wheel rects / sensor circles) + nearest snap
-  sensors/light.js        inverse-square light sampling, range + saturation
+  sensors/light.js        inverse-square sampling + detection-threshold normalization,
+                          effective range (drives beam length)
   sensors/raycast.js      ray vs circle / rotated rect (pure geometry)
   simulation/sampleSensors.js   per-step sensor evaluation for a vehicle pose
   simulation/worldSnapshot.js   world elements -> {lights, obstacles}
@@ -61,7 +62,9 @@ Done:
   snap to the nearest node on drop, sensors re-aim along the node normal, wires
   follow; last-clicked element wins over overlaps; wheels render as top-down rects
 - Wiring editor with polarity/weight, live validation
-- World sim: lights (inverse-square), raycast distance sensors + beam viz,
+- World sim: threshold-anchored light sensors (normal + inverted are exact
+  complements on [0,1]; beam length = the sensor's effective detection range,
+  brightness = normalized level), raycast distance sensors + beam viz,
   powered wheels, pan/zoom camera, element gizmo-style inspector, instance
   tools (Add Here / Random / Line Up / Grid), play/pause/step/reset/time scale
 - Vehicle/world JSON import/export + localStorage recents

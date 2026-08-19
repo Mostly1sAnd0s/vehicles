@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateWiring } from '../src/models/wiring.js';
 
-function vehicle(wires) {
+function vehicle(wires, components) {
   return {
-    components: [
+    components: components ?? [
       { id: 's1', type: 'light_sensor', ports: [{ id: 'out', kind: 'sensor_output' }] },
       { id: 's2', type: 'distance_sensor', ports: [{ id: 'out', kind: 'sensor_output' }] },
       { id: 'w1', type: 'powered_wheel', ports: [{ id: 'drive', kind: 'actuator_input' }] },
@@ -14,10 +14,16 @@ function vehicle(wires) {
   };
 }
 
+// category map as resolved from config/components.json in the app
+const DEFS = {
+  light_sensor: { category: 'sensor' },
+  distance_sensor: { category: 'sensor' },
+  powered_wheel: { category: 'actuator' },
+};
+
 const wire = (overrides = {}) => ({
   from: { componentId: 's1', port: 'out' },
   to: { componentId: 'w1', port: 'drive' },
-  polarity: 'excitatory',
   weight: 0.5,
   ...overrides,
 });
@@ -56,8 +62,27 @@ test('rejects out-of-range weight', () => {
   assert.ok(validateWiring(vehicle([wire({ weight: 1.5 })])).some(e => e.code === 'bad_weight'));
 });
 
-test('rejects invalid polarity', () => {
-  assert.ok(validateWiring(vehicle([wire({ polarity: 'sideways' })])).some(e => e.code === 'bad_polarity'));
+test('component polarities: valid values accepted', () => {
+  const comps = [
+    { id: 's1', type: 'light_sensor', ports: [{ id: 'out', kind: 'sensor_output' }], polarity: 'inverted' },
+    { id: 'w1', type: 'powered_wheel', ports: [{ id: 'drive', kind: 'actuator_input' }], polarity: 'reverse' },
+  ];
+  assert.deepEqual(validateWiring(vehicle([], comps), DEFS), []);
+});
+
+test('rejects invalid component polarity', () => {
+  const badSensor = [
+    { id: 's1', type: 'light_sensor', ports: [{ id: 'out', kind: 'sensor_output' }], polarity: 'sideways' },
+    { id: 'w1', type: 'powered_wheel', ports: [{ id: 'drive', kind: 'actuator_input' }] },
+  ];
+  const errsS = validateWiring(vehicle([], badSensor), DEFS);
+  assert.ok(errsS.some(e => e.code === 'bad_component_polarity'));
+  assert.ok(errsS.every(e => e.componentId === 's1'));
+  const badWheel = [
+    { id: 's1', type: 'light_sensor', ports: [{ id: 'out', kind: 'sensor_output' }] },
+    { id: 'w1', type: 'powered_wheel', ports: [{ id: 'drive', kind: 'actuator_input' }], polarity: 'ccw' },
+  ];
+  assert.ok(validateWiring(vehicle([], badWheel), DEFS).some(e => e.code === 'bad_component_polarity'));
 });
 
 test('errors reference the offending wire index', () => {

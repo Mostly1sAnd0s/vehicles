@@ -59,7 +59,6 @@ async function main() {
     palette: $('palette'),
     wireFrom: $('wire-from'),
     wireTo: $('wire-to'),
-    wirePolarity: $('wire-polarity'),
     wireWeightRange: $('wire-weight-range'),
     wireWeightVal: $('wire-weight-val'),
     addWire: $('add-wire'),
@@ -88,6 +87,7 @@ async function main() {
       timescale: $('timescale'),
       timescaleVal: $('timescale-val'),
       btnBeams: $('btn-beams'),
+      btnValues: $('btn-values'),
       prototypes: $('prototypes'),
       worldInspector: $('world-inspector'),
     }, state, {

@@ -1,34 +1,51 @@
 /**
  * Wiring validation for a vehicle JSON document.
- * wire = { from: {componentId, port}, to: {componentId, port}, polarity, weight }
- * Returns an array of { code, wireIndex?, message }; empty means valid.
+ * wire = { from: {componentId, port}, to: {componentId, port}, weight }
+ * Returns an array of { code, wireIndex?, componentId?, message }; empty means valid.
  *
  * Port kinds are read from the component's own `ports` list; if absent they
  * fall back to `defs[componentType].ports` (from components.json).
+ *
+ * Polarity lives on the *component*, not the wire: sensors are
+ * 'normal' | 'inverted', actuators are 'forward' | 'reverse'.
  */
 
-const POLARITIES = new Set(['excitatory', 'inhibitory']);
+const SENSOR_POLARITIES = new Set(['normal', 'inverted']);
+const ACTUATOR_POLARITIES = new Set(['forward', 'reverse']);
 
 export function validateWiring(vehicle, defs = {}) {
   const errors = [];
-  const components = new Map(
-    (vehicle.components ?? []).map(c => [c.id, c])
-  );
+  const components = (vehicle.components ?? []);
+  const byId = new Map(components.map(c => [c.id, c]));
   const seenPairs = new Map(); // "fromId:port>toId:port" -> first wire index
 
+  // per-component polarity (category comes from components.json defs)
+  for (const c of components) {
+    if (c.polarity === undefined) continue;
+    const category = defs[c.type]?.category;
+    const ok = category === 'sensor'
+      ? SENSOR_POLARITIES.has(c.polarity)
+      : category === 'actuator'
+        ? ACTUATOR_POLARITIES.has(c.polarity)
+        : true; // passive/mount: no polarity expected, allow
+    if (!ok) {
+      errors.push({
+        code: 'bad_component_polarity',
+        componentId: c.id,
+        message: `component ${c.id} has invalid polarity "${c.polarity}" for a ${category ?? 'unknown'}`,      });
+    }
+  }
+
   (vehicle.wires ?? []).forEach((wire, i) => {
-    checkEndpoint(wire.from, 'from', components, errors, i, defs);
-    checkEndpoint(wire.to, 'to', components, errors, i, defs);
+    checkEndpoint(wire.from, 'from', byId, errors, i, defs);
+    checkEndpoint(wire.to, 'to', byId, errors, i, defs);
 
     if (wire.weight !== undefined && (typeof wire.weight !== 'number' || wire.weight < 0 || wire.weight > 1)) {
       errors.push({ code: 'bad_weight', wireIndex: i, message: `weight must be a number in [0,1] (got ${wire.weight})` });
     }
-    if (!POLARITIES.has(wire.polarity)) {
-      errors.push({ code: 'bad_polarity', wireIndex: i, message: `polarity must be excitatory or inhibitory (got ${wire.polarity})` });
-    }
 
-    const fromDef = findPortDef(wire.from, components, defs);
-    const toDef = findPortDef(wire.to, components, defs);
+    const fromDef = findPortDef(wire.from, byId, defs);
+    const toDef = findPortDef(wire.to, byId, defs);
     if (fromDef && toDef && !(fromDef.kind === 'sensor_output' && toDef.kind === 'actuator_input')) {
       errors.push({
         code: 'type_mismatch',
