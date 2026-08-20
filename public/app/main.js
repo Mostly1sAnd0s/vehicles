@@ -89,6 +89,7 @@ async function main() {
       timescaleVal: $('timescale-val'),
       btnBeams: $('btn-beams'),
       btnValues: $('btn-values'),
+      btnPaths: $('btn-paths'),
       addVehicle: $('add-vehicle'),
       prototypes: $('prototypes'),
       worldInspector: $('world-inspector'),

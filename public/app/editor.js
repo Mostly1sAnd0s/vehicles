@@ -287,14 +287,24 @@ export class VehicleEditor {
 
   renderInspector() {
     const box = this.ui.inspector;
+    const v = this.state.vehicle;
     const c = this.selectedComp ? this.comp(this.selectedComp) : null;
-    if (!c) { box.innerHTML = ''; return; }
+
+    // Vehicle-level row: body color — always shown so it's visible even when
+    // nothing is selected (and so the motion trail matches the vehicle).
+    let html = `<h3>Body</h3><label>Body color <input type="color" id="ins-body-color" value="${v.body.color ?? '#4da3ff'}"></label>`;
+
+    if (!c) {
+      box.innerHTML = html;
+      this._bindBodyColor(box, v);
+      return;
+    }
 
     // Build the whole panel as one string and assign innerHTML ONCE, then bind
     // handlers. (Incremental `box.innerHTML += …` replaces the DOM each time
     // and silently drops any event handler bound to an earlier node — this is
     // what used to clobber the Range input's onchange.)
-    let html = `<h3>Selected</h3>`;
+    html += `<h3>Selected</h3>`;
     if (typeof c.aimAngle === 'number') {
       html += `<label>Aim (rad) <input type="number" id="ins-aim" step="0.1" value="${c.aimAngle.toFixed(2)}"></label>`;
     }
@@ -329,6 +339,7 @@ export class VehicleEditor {
         </select></label>`;
     }
     box.innerHTML = html;
+    this._bindBodyColor(box, v);
 
     // Now bind — every control still exists because the DOM wasn't rebuilt.
     box.querySelector('#ins-aim')?.addEventListener('change', e => { c.aimAngle = Number(e.target.value); this.refresh(); });
@@ -347,6 +358,10 @@ export class VehicleEditor {
       frEl.addEventListener('change', () => this.refresh());
     }
 
+  }
+
+  _bindBodyColor(box, v) {
+    box.querySelector('#ins-body-color')?.addEventListener('input', e => { v.body.color = e.target.value; this.refresh(); });
   }
 
   // ---------- drawing ----------

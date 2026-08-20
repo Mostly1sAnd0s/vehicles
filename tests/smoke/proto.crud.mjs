@@ -124,6 +124,13 @@ try {
   `);
   if (add2[2] !== 'Vehicle C') fail('add2: expected "Vehicle C", got ' + JSON.stringify(add2));
 
+  // --- ADD cycles body color: every type gets a distinct palette color ---
+  const colors = await evalJs(`
+    (() => window.__app().state.world.vehiclePrototypes.map(p => (p._vehicle?.body?.color ?? '#4da3ff')))()
+  `);
+  if (colors.length < 3) fail('color: expected 3 prototypes, got ' + colors.length);
+  if (new Set(colors).size !== colors.length) fail('color: Add Vehicle did not assign distinct body colors: ' + JSON.stringify(colors));
+
   // --- REMOVE: stub confirm, delete Vehicle B, check physics cleanup ---
   const del = await evalJs(`
     (() => {

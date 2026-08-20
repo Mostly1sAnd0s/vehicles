@@ -9,10 +9,13 @@ import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionA
 import { findInstanceAt } from '../src/models/hitTest.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
-import { nextVehicleName, makePrototype, blankVehicle, removePrototype } from './prototypes.js';
+import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
 
 // Matter.js is loaded as a classic script (public/vendor/matter.min.js)
 const M = globalThis.Matter;
+
+/** Max points kept per instance for the Paths overlay. Long runs stay O(1). */
+const PATH_CAP = 2000;
 
 export class WorldSim {
   constructor(canvas, ui, state, hooks) {
@@ -30,6 +33,7 @@ export class WorldSim {
     this.obstacleBodies = [];
     this.lastSamples = [];        // for beam drawing (per instance)
     this.showValues = true;       // on-body sensor/motor readouts
+    this.paths = false;           // show motion trails behind each robot
     this.acc = 0;
     this.lastT = performance.now();
 
@@ -149,6 +153,14 @@ export class WorldSim {
     const M = this.M;
     for (const inst of this.instances) if (inst.body) this.applyWheelFriction(inst);
     M.Engine.update(this.engine, this.dtMs);
+
+    // Record trajectory points for the Paths overlay. Capped; cleared on reset().
+    for (const inst of this.instances) {
+      if (!inst.body) continue;
+      if (!Array.isArray(inst.path)) inst.path = [];
+      inst.path.push({ x: Math.round(inst.body.position.x), y: Math.round(inst.body.position.y) });
+      if (inst.path.length > PATH_CAP) inst.path.shift();
+    }
 
     const snapshot = worldElementsToSnapshot(this.worldDoc.elements);
     const thrustScale = this.state.configs.app.defaults.thrustScale ?? 0.25;
@@ -304,6 +316,10 @@ export class WorldSim {
       this.showValues = !this.showValues;
       this.ui.btnValues.textContent = `Values: ${this.showValues ? 'on' : 'off'}`;
     };
+    this.ui.btnPaths.onclick = () => {
+      this.paths = !this.paths;
+      this.ui.btnPaths.textContent = `Paths: ${this.paths ? 'on' : 'off'}`;
+    };
 
     const kb = this.state.configs.ui.keybindings ?? {};
     window.addEventListener('keydown', e => {
@@ -336,6 +352,7 @@ export class WorldSim {
       M_BodySetAngle(this.M, inst.body, inst.seed.rotation);
       inst.body.velocity = { x: 0, y: 0 };
       inst.body.angularVelocity = 0;
+      inst.path = []; // fresh trail after a reset
     }
     this.acc = 0;
   }
@@ -430,7 +447,7 @@ export class WorldSim {
     for (let i = 0; i < insts.length; i++) {
       if (!existing[i]) {
         const seed = insts[i];
-        existing.push({ id: seed.id, protoId: proto.id, seed: { ...seed.position, rotation: seed.rotation }, body: null });
+        existing.push({ id: seed.id, protoId: proto.id, seed: { ...seed.position, rotation: seed.rotation }, body: null, path: [] });
       } else {
         existing[i].seed = { x: insts[i].position.x, y: insts[i].position.y, rotation: insts[i].rotation };
       }
@@ -461,6 +478,8 @@ export class WorldSim {
       vehicle: donor ? (donor._vehicle ?? donor.vehicle) : blankVehicle(),
       count: 3,
     });
+    // Give the new type a body color no existing type uses so they read apart.
+    proto._vehicle.body.color = nextVehicleColor(protos);
     protos.push(proto);
     this.ensureCount(proto, proto.instances.length); // spawns instances + re-renders
   }

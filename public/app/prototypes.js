@@ -1,13 +1,41 @@
 // Pure helpers for vehicle-type CRUD in the world document.
 // No DOM / Matter.js here: everything is testable with plain node --test.
 
+/** Distinct body colors so vehicle types read apart at a glance. Index 0 is
+ *  also the default for any vehicle that never picked a color. */
+export const VEHICLE_COLORS = [
+  '#4da3ff', // blue (default)
+  '#ff6b6b', // red
+  '#51cf66', // green
+  '#ffd43b', // yellow
+  '#845ef7', // violet
+  '#22b8cf', // cyan
+  '#ff922b', // orange
+  '#f06595', // pink
+];
+
+/** A vehicle's effective body color: its explicit `body.color`, else default. */
+export function vehicleColor(proto) {
+  const v = proto && (proto._vehicle ?? proto.vehicle);
+  return v?.body?.color ?? VEHICLE_COLORS[0];
+}
+
+/** First palette color no existing prototype is using. Legacy (colorless)
+ *  prototypes count as using the default, so a fresh type always differs from
+ *  what's already on screen. Falls back to palette[0] when all are taken. */
+export function nextVehicleColor(prototypes) {
+  const used = new Set((prototypes ?? []).map(vehicleColor));
+  for (const c of VEHICLE_COLORS) if (!used.has(c)) return c;
+  return VEHICLE_COLORS[0];
+}
+
 /** Default chassis used when there is no existing prototype to clone from. */
 export function blankVehicle() {
   return {
     schemaVersion: 1,
     id: 'my-vehicle',
     name: 'New Vehicle',
-    body: { shape: 'rect', width: 80, height: 40 },
+    body: { shape: 'rect', width: 80, height: 40, color: VEHICLE_COLORS[0] },
     components: [],
     wires: [],
   };

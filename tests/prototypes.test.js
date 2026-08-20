@@ -6,6 +6,9 @@ import {
   makePrototype,
   removePrototype,
   blankVehicle,
+  vehicleColor,
+  nextVehicleColor,
+  VEHICLE_COLORS,
 } from '../public/app/prototypes.js';
 
 const NAMES = names => names.map(n => ({ name: n }));
@@ -37,6 +40,35 @@ test('nextVehicleName wraps to double letters after Z and keeps scanning for gap
 
 test('nextVehicleName ignores unrelated names', () => {
   assert.equal(nextVehicleName(NAMES(['Sun Chaser', 'Vehicle A'])), 'Vehicle B');
+});
+
+// ---------------- vehicle color ----------------
+
+const protoWithColor = c => ({ _vehicle: { body: c == null ? {} : { color: c } } });
+
+test('vehicleColor returns the body color, falling back to the default for legacy docs', () => {
+  assert.equal(vehicleColor({ _vehicle: { body: { color: '#ff0000' } } }), '#ff0000');
+  assert.equal(vehicleColor({ vehicle: { body: { color: '#00ff00' } } }), '#00ff00');
+  assert.equal(vehicleColor(protoWithColor(null)), VEHICLE_COLORS[0]); // legacy: no explicit color
+  assert.equal(vehicleColor(null), VEHICLE_COLORS[0]);
+});
+
+test('nextVehicleColor returns the first unused palette color', () => {
+  assert.equal(nextVehicleColor([]), VEHICLE_COLORS[0]);
+  assert.equal(nextVehicleColor([protoWithColor(VEHICLE_COLORS[0])]), VEHICLE_COLORS[1]);
+  assert.equal(
+    nextVehicleColor([protoWithColor(VEHICLE_COLORS[0]), protoWithColor(VEHICLE_COLORS[2])]),
+    VEHICLE_COLORS[1],
+  ); // fills the gap at index 1 rather than advancing past it
+});
+
+test('nextVehicleColor treats a legacy (colorless) proto as using the default color', () => {
+  assert.equal(nextVehicleColor([protoWithColor(null)]), VEHICLE_COLORS[1]);
+});
+
+test('nextVehicleColor falls back to the first palette color when every color is in use', () => {
+  const all = VEHICLE_COLORS.map(c => protoWithColor(c));
+  assert.equal(nextVehicleColor(all), VEHICLE_COLORS[0]);
 });
 
 // ---------------- makePrototype ----------------
@@ -108,4 +140,8 @@ test('blankVehicle is a drivable-default chassis with no components or wires', (
   assert.ok(v.body && v.body.width > 0 && v.body.height > 0);
   assert.deepEqual(v.components, []);
   assert.deepEqual(v.wires, []);
+});
+
+test('blankVehicle body carries the default color', () => {
+  assert.equal(blankVehicle().body.color, VEHICLE_COLORS[0]);
 });

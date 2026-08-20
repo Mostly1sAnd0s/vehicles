@@ -68,9 +68,9 @@ export function drawWorld(sim) {
       ctx.translate(b.position.x, b.position.y);
       ctx.rotate(b.angle);
 
-      // body
+      // body (stroke = the vehicle's own color, so it matches its trail)
       ctx.fillStyle = '#2b3a52';
-      ctx.strokeStyle = '#4da3ff';
+      ctx.strokeStyle = v.body?.color ?? '#4da3ff';
       ctx.lineWidth = 2;
       ctx.fillRect(-v.body.width / 2, -v.body.height / 2, v.body.width, v.body.height);
       ctx.strokeRect(-v.body.width / 2, -v.body.height / 2, v.body.width, v.body.height);
@@ -93,6 +93,20 @@ export function drawWorld(sim) {
         ctx.fill();
       }
       ctx.restore();
+    }
+
+    // motion trails (drawn over the bodies), gated by the Paths toggle
+    if (sim.paths) {
+      for (const inst of sim.instances) {
+        const v = sim.prototypeVehicle(inst.protoId);
+        if (!v || !Array.isArray(inst.path) || inst.path.length < 2) continue;
+        ctx.beginPath();
+        inst.path.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.strokeStyle = hexToRgba(v.body?.color ?? '#4da3ff', 0.5);
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+      }
     }
 
     // on-body readouts: sensor level→output per sensor, signed force per wheel (upright)
@@ -202,3 +216,13 @@ export function drawWorld(sim) {
       }
     }
   }
+
+/** '#rrggbb' -> 'rgba(r,g,b,alpha)'. Tolerates 3-digit hex; bad input falls
+ *  back to the default blue so a trail is always visible. */
+function hexToRgba(hex, alpha) {
+  let h = String(hex ?? '').replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const n = parseInt(h, 16);
+  if (Number.isNaN(n) || h.length !== 6) return `rgba(77,163,255,${alpha})`;
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}

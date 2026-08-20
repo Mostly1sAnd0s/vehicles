@@ -213,6 +213,37 @@ try {
   if (Math.sign(result.pF) === Math.sign(result.pR)) {
     fail(`motor polarity did not invert thrust: forward=${result.pF} reverse=${result.pR}`);
   }
+
+  // --- PATHS: toggle on; trail records finite points while stepping; capped at
+  //     PATH_CAP (verified by prefilling just under the limit); Reset clears it.
+  const paths = await evalJs(`
+    (() => {
+      const { worldSim: sim } = window.__app();
+      const btn = document.getElementById('btn-paths');
+      btn.click();
+      const labelOn = btn.textContent;
+      const inst = sim.instances[0];
+      inst.path = [];                                  // start fresh
+      for (let i = 0; i < 4; i++) document.getElementById('btn-step').click();
+      const recorded = inst.path.length;
+      const finite = inst.path.every(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+      inst.path = Array.from({ length: 1999 }, () => ({ x: 0, y: 0 })); // just under cap
+      document.getElementById('btn-step').click();     // -> 2000
+      document.getElementById('btn-step').click();     // -> 2001, capped to 2000
+      const capped = inst.path.length;
+      sim.reset();
+      const clearedAfterReset = inst.path.length === 0;
+      btn.click();
+      const labelOff = btn.textContent;
+      return { labelOn, recorded, finite, capped, clearedAfterReset, labelOff };
+    })()
+  `);
+  if (!/Paths: on/.test(paths.labelOn)) fail('paths: toggle did not turn on: ' + paths.labelOn);
+  if (paths.recorded < 2 || !paths.finite) fail('paths: trail did not record finite points while stepping: ' + JSON.stringify(paths));
+  if (paths.capped !== 2000) fail('paths: cap not enforced (expected 2000, got ' + paths.capped + ')');
+  if (!paths.clearedAfterReset) fail('paths: Reset did not clear the trail');
+  if (!/Paths: off/.test(paths.labelOff)) fail('paths: toggle did not turn off: ' + paths.labelOff);
+
   ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}`);
 } catch (e) {
   fail(e.stack ?? String(e));
