@@ -185,7 +185,39 @@ try {
   if (picker.after !== picker.clicked) fail('color picker: clicking a swatch did not set the body color ' + JSON.stringify(picker));
   if (picker.activeNow !== 1 || !picker.activeIsTarget) fail('color picker: exactly the chosen swatch must be marked active ' + JSON.stringify(picker));
 
-  ok('editor: placed at snap point, wired, duplicate detected, drag-snapped sR with wire following; 4x4 body-color picker works');
+  // --- EDITOR CANVAS REFLECTS THE COLOR: the editor's body fill must be the
+  //     chosen color too (it used to be a fixed dark navy), matching the world view.
+  //     A single center pixel is fragile (a snap dot can sit there), so scan the
+  //     horizontal row through the body's vertical center and require the chosen
+  //     color to appear as a filled run. Components/snap dots are small and their
+  //     colors differ by >4/channel, so only the true body fill matches at tol=4.
+  const paint = await evalJs(`
+    (async () => {
+      const frame = () => new Promise(r => requestAnimationFrame(() => r()));
+      await frame(); await frame();
+      const cv = document.getElementById('editor-canvas');
+      const ctx = cv.getContext('2d');
+      const y = (cv.height / 2) | 0;
+      const d = ctx.getImageData(0, y, cv.width, 1).data;
+      const hexToRgb = h => { let s = h.replace('#', ''); if (s.length === 3) s = [...s].map(c => c + c).join(''); return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)]; };
+      const [er, eg, eb] = hexToRgb(${JSON.stringify(picker.clicked)});
+      const tol = 4, matches = [];
+      for (let i = 0; i < cv.width; i++) {
+        const o = i * 4;
+        if (Math.abs(d[o] - er) <= tol && Math.abs(d[o + 1] - eg) <= tol && Math.abs(d[o + 2] - eb) <= tol) matches.push(i);
+      }
+      let longest = 0, run = 0, prev = -1;
+      for (const x of matches) { run = (x === prev + 1) ? run + 1 : 1; if (run > longest) longest = run; prev = x; }
+      return { expect: [er, eg, eb], w: cv.width, h: cv.height, matchCount: matches.length, longestRun: longest };
+    })()
+  `);
+  if (!paint.w || !paint.h) fail('editor canvas not sized yet, cannot sample fill ' + JSON.stringify(paint));
+  // The body spans the central band of the canvas; a horizontal run this long is
+  // unambiguously the body fill, not a stray dot/edge.
+  const needRun = Math.max(8, Math.floor(paint.w * 0.03));
+  if (paint.longestRun < needRun) fail('editor body fill does not reflect the chosen color ' + JSON.stringify(paint.expect) + ': longest matching run ' + paint.longestRun + ' < ' + needRun + ' (matches ' + paint.matchCount + ')');
+
+  ok('editor: placed at snap point, wired, duplicate detected, drag-snapped sR with wire following; 4x4 body-color picker works + editor canvas shows the color');
 } catch (e) {
   fail(e.stack ?? String(e));
 }

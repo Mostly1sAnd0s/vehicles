@@ -394,9 +394,12 @@ export class VehicleEditor {
     const scale = this._viewScale;
     ctx.scale(scale, scale);
 
-    // body
-    ctx.fillStyle = '#2b3a52';
-    ctx.strokeStyle = '#4da3ff';
+    // body — the fill IS the chosen color (matching the world view); the outline
+    // is a few shades lighter so it still reads against the fill. Falls back to
+    // the default blue when the vehicle has no explicit color set.
+    const bodyColor = v.body.color ?? DEFAULT_BODY_COLOR;
+    ctx.fillStyle = bodyColor;
+    ctx.strokeStyle = lightenHex(bodyColor);
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.rect(-v.body.width / 2, -v.body.height / 2, v.body.width, v.body.height);
@@ -528,4 +531,4 @@ function fillSelect(sel, items, label) {
 import { generateSnapPoints } from '../src/models/snapPoints.js';
 import { validateWiring } from '../src/models/wiring.js';
 import { componentSize, componentHits, nearestSnapIndex } from '../src/models/hitTest.js';
-import { colorPaletteHtml } from './color.js';
+import { colorPaletteHtml, lightenHex, DEFAULT_BODY_COLOR } from './color.js';
