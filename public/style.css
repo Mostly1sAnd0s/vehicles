@@ -46,6 +46,11 @@ button.active { background: var(--accent); color: #08111c; border-color: var(--a
 label { display: flex; align-items: center; gap: 6px; margin: 6px 0; color: var(--dim); }
 select, input[type="number"] { width: 100%; }
 
+/* 4x4 body-color picker (plain swatches; no native color popup) */
+.color-palette { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 2px 0 6px; }
+.swatch { width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.swatch.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35); }
+
 main { flex: 1; min-height: 0; display: flex; }
 .tab-panel { display: none; flex: 1; min-height: 0; }
 .tab-panel.active { display: flex; }

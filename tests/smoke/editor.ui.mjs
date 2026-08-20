@@ -159,7 +159,33 @@ try {
   if (!result.dragOk) fail('dragged component did not snap to the target node: ' + JSON.stringify(result));
   if (!result.aimOk) fail('sensor aim not re-aimed along node normal after drag');
   if (!result.wireFollows) fail('wire did not follow its dragged sensor');
-  ok('editor: placed at snap point, wired, duplicate detected, drag-snapped sR with wire following');
+
+  // --- BODY COLOR PICKER: a static 4x4 swatch palette (no native color input)
+  //     that closes on click). Clicking a swatch sets the vehicle body color and
+  //     marks it active; no popup is lost to the re-render.
+  const picker = await evalJs(`
+    (() => {
+      const app = window.__app();
+      const box = document.querySelector('#inspector');
+      const swatches = [...box.querySelectorAll('.color-palette .swatch')];
+      const hasNative = !!box.querySelector('input[type="color"]');
+      const before = app.state.vehicle.body.color;
+      const target = swatches.find(s => s.dataset.color !== before);
+      const clicked = target.dataset.color;
+      target.click();
+      const after = app.state.vehicle.body.color;
+      const activeNow = box.querySelectorAll('.color-palette .swatch.active').length;
+      const activeIsTarget = box.querySelector('.color-palette .swatch[data-color="' + clicked + '"]')?.classList.contains('active');
+      return { n: swatches.length, hasNative, before, clicked, after, activeNow, activeIsTarget };
+    })()
+  `);
+  if (picker.n !== 16) fail('color picker: expected a 4x4 palette (16 swatches), got ' + picker.n);
+  if (picker.hasNative) fail('color picker: still using the native <input type="color"> (closes on click)');
+  if (picker.before === picker.clicked) fail('color picker: test must choose a color different from the current one');
+  if (picker.after !== picker.clicked) fail('color picker: clicking a swatch did not set the body color ' + JSON.stringify(picker));
+  if (picker.activeNow !== 1 || !picker.activeIsTarget) fail('color picker: exactly the chosen swatch must be marked active ' + JSON.stringify(picker));
+
+  ok('editor: placed at snap point, wired, duplicate detected, drag-snapped sR with wire following; 4x4 body-color picker works');
 } catch (e) {
   fail(e.stack ?? String(e));
 }

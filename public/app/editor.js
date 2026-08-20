@@ -291,8 +291,10 @@ export class VehicleEditor {
     const c = this.selectedComp ? this.comp(this.selectedComp) : null;
 
     // Vehicle-level row: body color — always shown so it's visible even when
-    // nothing is selected (and so the motion trail matches the vehicle).
-    let html = `<h3>Body</h3><label>Body color <input type="color" id="ins-body-color" value="${v.body.color ?? '#4da3ff'}"></label>`;
+    // nothing is selected (and so the motion trail matches the vehicle). A static
+    // 4x4 palette (no native <input type="color">) means clicking a swatch just
+    // sets the color and re-renders; there's no popup that closes on click.
+    let html = `<h3>Body</h3><label>Body color</label><div class="color-palette">${colorPaletteHtml(v.body.color)}</div>`;
 
     if (!c) {
       box.innerHTML = html;
@@ -361,7 +363,9 @@ export class VehicleEditor {
   }
 
   _bindBodyColor(box, v) {
-    box.querySelector('#ins-body-color')?.addEventListener('input', e => { v.body.color = e.target.value; this.refresh(); });
+    box.querySelectorAll('.color-palette .swatch').forEach(btn => {
+      btn.addEventListener('click', () => { v.body.color = btn.dataset.color; this.refresh(); });
+    });
   }
 
   // ---------- drawing ----------
@@ -524,3 +528,4 @@ function fillSelect(sel, items, label) {
 import { generateSnapPoints } from '../src/models/snapPoints.js';
 import { validateWiring } from '../src/models/wiring.js';
 import { componentSize, componentHits, nearestSnapIndex } from '../src/models/hitTest.js';
+import { colorPaletteHtml } from './color.js';

@@ -4,6 +4,7 @@
  */
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { componentSize } from '../src/models/hitTest.js';
+import { hexToRgba, lightenHex, DEFAULT_BODY_COLOR } from './color.js';
 
 export function drawWorld(sim) {
     const cv = sim.canvas;
@@ -68,9 +69,10 @@ export function drawWorld(sim) {
       ctx.translate(b.position.x, b.position.y);
       ctx.rotate(b.angle);
 
-      // body (stroke = the vehicle's own color, so it matches its trail)
-      ctx.fillStyle = '#2b3a52';
-      ctx.strokeStyle = v.body?.color ?? '#4da3ff';
+      // body: fill is the chosen color; outline a few shades lighter than it
+      const bodyColor = v.body?.color ?? DEFAULT_BODY_COLOR;
+      ctx.fillStyle = bodyColor;
+      ctx.strokeStyle = lightenHex(bodyColor);
       ctx.lineWidth = 2;
       ctx.fillRect(-v.body.width / 2, -v.body.height / 2, v.body.width, v.body.height);
       ctx.strokeRect(-v.body.width / 2, -v.body.height / 2, v.body.width, v.body.height);
@@ -102,7 +104,7 @@ export function drawWorld(sim) {
         if (!v || !Array.isArray(inst.path) || inst.path.length < 2) continue;
         ctx.beginPath();
         inst.path.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-        ctx.strokeStyle = hexToRgba(v.body?.color ?? '#4da3ff', 0.5);
+        ctx.strokeStyle = hexToRgba(v.body?.color ?? DEFAULT_BODY_COLOR, 0.5);
         ctx.lineWidth = 2;
         ctx.lineJoin = 'round';
         ctx.stroke();
@@ -217,12 +219,3 @@ export function drawWorld(sim) {
     }
   }
 
-/** '#rrggbb' -> 'rgba(r,g,b,alpha)'. Tolerates 3-digit hex; bad input falls
- *  back to the default blue so a trail is always visible. */
-function hexToRgba(hex, alpha) {
-  let h = String(hex ?? '').replace('#', '');
-  if (h.length === 3) h = h.split('').map(c => c + c).join('');
-  const n = parseInt(h, 16);
-  if (Number.isNaN(n) || h.length !== 6) return `rgba(77,163,255,${alpha})`;
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
-}

@@ -209,6 +209,32 @@ try {
   `);
   if (!veto.sameN || !veto.sameI) fail('veto: confirm()=false must leave doc + instances untouched ' + JSON.stringify(veto));
 
+  // --- BODY FILL COLOR: the body's fill must be the chosen color (regression:
+  //     it used to be a fixed dark navy). Pick a distinctive red, force one paint
+  //     frame, and sample the canvas pixel at the body center.
+  const fillRes = await evalJs(`
+    (() => {
+      const { state, worldSim: sim } = window.__app();
+      const proto = state.world.vehiclePrototypes.find(p => p.name === 'Vehicle A');
+      proto._vehicle.body.color = '#fa5252'; // distinctive red fill
+      const inst = sim.instances.find(i => i.protoId === proto.id);
+      const b = inst.body;
+      // Center the camera on the body so its center is exactly at the canvas
+      // center (independent of wherever the instance happened to be).
+      sim.view.x = b.position.x;
+      sim.view.y = b.position.y;
+      sim.draw(); // synchronous paint so the buffer holds the fresh color
+      const cv = document.getElementById('world-canvas');
+      const dpr = window.devicePixelRatio || 1;
+      const px = cv.getContext('2d')
+        .getImageData(Math.round(cv.clientWidth / 2 * dpr), Math.round(cv.clientHeight / 2 * dpr), 1, 1).data;
+      return { r: px[0], g: px[1], b: px[2] };
+    })()
+  `);
+  if (!(fillRes.r > 180 && fillRes.g < 170 && fillRes.b < 170)) {
+    fail('body fill: center should be the chosen red, got rgb(' + fillRes.r + ',' + fillRes.g + ',' + fillRes.b + ')');
+  }
+
   ok('proto CRUD + robot drag: add B/C; remove drops only target; drag repositions (zero momentum, seed adopted); veto intact');
 
 } catch (err) {
