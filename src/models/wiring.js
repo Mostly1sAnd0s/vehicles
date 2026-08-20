@@ -13,11 +13,24 @@
 const SENSOR_POLARITIES = new Set(['normal', 'inverted']);
 const ACTUATOR_POLARITIES = new Set(['forward', 'reverse']);
 
+// The only legal wiring directions. Logic gates extend the graph with
+// logic_in / logic_out port kinds: a sensor or gate output may feed a gate
+// input, and a gate output may drive an actuator or another gate.
+const VALID_WIRE_PAIRS = new Set([
+  'sensor_output>actuator_input',
+  'sensor_output>logic_in',
+  'logic_out>actuator_input',
+  'logic_out>logic_in',
+]);
+
 export function validateWiring(vehicle, defs = {}) {
   const errors = [];
   const components = (vehicle.components ?? []);
-  const byId = new Map(components.map(c => [c.id, c]));
+  // Gate nodes resolve like components (they carry {id, type}; their ports come
+  // from the type def in components.json) so wires can reference them by id.
+  const byId = new Map([...components, ...(vehicle.logicGates ?? [])].map(c => [c.id, c]));
   const seenPairs = new Map(); // "fromId:port>toId:port" -> first wire index
+  const usedGateInputs = new Set(); // "gateId:inPort" -> only one feeder each
 
   // per-component polarity (category comes from components.json defs)
   for (const c of components) {
@@ -46,12 +59,22 @@ export function validateWiring(vehicle, defs = {}) {
 
     const fromDef = findPortDef(wire.from, byId, defs);
     const toDef = findPortDef(wire.to, byId, defs);
-    if (fromDef && toDef && !(fromDef.kind === 'sensor_output' && toDef.kind === 'actuator_input')) {
+    if (fromDef && toDef && !VALID_WIRE_PAIRS.has(`${fromDef.kind}>${toDef.kind}`)) {
       errors.push({
         code: 'type_mismatch',
         wireIndex: i,
-        message: `wires must connect a sensor_output to an actuator_input (got ${fromDef.kind} -> ${toDef.kind})`,
+        message: `wires must connect a sensor_output or logic_out to an actuator_input or logic_in (got ${fromDef.kind} -> ${toDef.kind})`,
       });
+    }
+
+    // A gate input takes exactly one feeder (unlike an actuator, which sums many).
+    if (toDef && toDef.kind === 'logic_in' && wire.to) {
+      const k = `${wire.to.componentId}:${wire.to.port}`;
+      if (usedGateInputs.has(k)) {
+        errors.push({ code: 'duplicate_input', wireIndex: i, message: `gate input ${k} already has a feeder (remove it first)` });
+      } else {
+        usedGateInputs.add(k);
+      }
     }
 
     if (wire.from && wire.to) {

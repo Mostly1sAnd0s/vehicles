@@ -58,11 +58,8 @@ async function main() {
 
   const editor = new VehicleEditor($('editor-canvas'), {
     palette: $('palette'),
-    wireFrom: $('wire-from'),
-    wireTo: $('wire-to'),
-    wireWeightRange: $('wire-weight-range'),
-    wireWeightVal: $('wire-weight-val'),
-    addWire: $('add-wire'),
+    gatePalette: $('gate-palette'),
+    bodyColor: $('body-color'),
     placedList: $('placed-list'),
     wireList: $('wire-list'),
     wiringErrors: $('wiring-errors'),

@@ -6,6 +6,7 @@
 import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
+import { evaluateLogicGates } from '../src/simulation/logic.js';
 import { findInstanceAt } from '../src/models/hitTest.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
@@ -180,12 +181,22 @@ export class WorldSim {
       allSamples.push(...samples.map(s => ({ ...s, instanceId: inst.id })));
 
       const sensorValue = id => samples.find(s => s.componentId === id)?.value ?? 0;
+      // Resolve combinational logic gates (topological; a sensor reading is
+      // coerced to digital when its 'digital' toggle is on). Gate outputs feed
+      // actuators or other gates through the same wires graph.
+      const gateValues = evaluateLogicGates(v, sensorValue);
+      inst.gateValues = gateValues;
+      const gateIds = new Set((v.logicGates ?? []).map(g => g.id));
       inst.lastMotors = []; // per-wheel signed force (for on-body readout)
       for (const c of v.components) {
         if (!c.local || this.componentDef(c.type)?.category !== 'actuator') continue;
         const feeders = inst.wireMap[c.id];
         let force = 0;
-        for (const f of feeders ?? []) force += computeActuation(sensorValue(f.sensorId), [f.wire], actCfg);
+        for (const f of feeders ?? []) {
+          // A feeder may come from a raw sensor OR a logic gate output.
+          const srcVal = gateIds.has(f.sensorId) ? (gateValues[f.sensorId] ?? 0) : sensorValue(f.sensorId);
+          force += computeActuation(srcVal, [f.wire], actCfg);
+        }
         force *= actuatorPolaritySign(c.polarity, actCfg); // per-motor forward/reverse
         force = applyMotorPower(force, c.props?.motorPower ?? actCfg.defaultMotorPower);
         inst.lastMotors.push({ id: c.id, local: { ...c.local }, force });

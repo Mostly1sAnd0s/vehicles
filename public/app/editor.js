@@ -10,6 +10,7 @@ export class VehicleEditor {
     this.state = state;
     this.hooks = hooks;
     this.placing = null;
+    this.placingGate = null;
     this.selectedComp = null;
     this.selectedWire = null;
     this.hoverSnap = -1;
@@ -32,7 +33,7 @@ export class VehicleEditor {
 
   bindUI() {
     const palette = this.ui.palette;
-    for (const def of this.componentsConfig) {
+    for (const def of this.componentsConfig.filter(d => d.category !== 'logic')) {
       const b = document.createElement('button');
       b.textContent = `${def.name}  ·  ${def.category}`;
       // press-drag onto a snap node; plain click keeps toggle-placing mode
@@ -45,10 +46,20 @@ export class VehicleEditor {
       palette.appendChild(b);
     }
 
-    this.ui.wireWeightRange.oninput = () => {
-      this.ui.wireWeightVal.textContent = Number(this.ui.wireWeightRange.value).toFixed(2);
-    };
-    this.ui.addWire.onclick = () => this.addWire();
+    // Logic gates: a separate, non-snapping palette. Click a gate to arm it,
+    // then click anywhere on the canvas to drop it at that local position.
+    const gatePalette = this.ui.gatePalette;
+    if (gatePalette) {
+      for (const def of this.componentsConfig.filter(d => d.category === 'logic')) {
+        const b = document.createElement('button');
+        b.textContent = def.name;
+        b.addEventListener('click', () => {
+          this.setPlacingGate(this.placingGate === def.id ? null : def.id);
+        });
+        gatePalette.appendChild(b);
+      }
+    }
+
   }
 
   bindCanvas() {
@@ -60,7 +71,9 @@ export class VehicleEditor {
 
     // grab a placed component anywhere on its footprint (full element size)
     this.canvas.addEventListener('mousedown', e => {
-      if (this.placing) return; // click handler handles placing mode
+      if (this.placing || this.placingGate) return; // click handler handles placing mode
+      const g = this.hitGate(this.toLocal(e));
+      if (g) { this.drag = { c: g, moved: false, target: -1, isGate: true }; return; }
       const c = this.hitComponent(this.toLocal(e));
       if (c) {
         // last-clicked element takes priority over overlapping ones -> move to front
@@ -80,13 +93,14 @@ export class VehicleEditor {
       }
       if (!this.drag) return;
       const p = this.toLocal(e);
-      if (!this.drag.moved && Math.hypot(p.x - this.drag.c.local.x, p.y - this.drag.c.local.y) > 3) {
+      const anchor = this.drag.isGate ? 'pos' : 'local';
+      if (!this.drag.moved && Math.hypot(p.x - this.drag.c[anchor].x, p.y - this.drag.c[anchor].y) > 3) {
         this.drag.moved = true;
       }
       if (this.drag.moved) {
-        // moving the component moves its wire endpoints too (wires reference it)
-        this.drag.c.local = { x: p.x, y: p.y };
-        this.drag.target = nearestSnapIndex(this.snapPoints(), p);
+        // moving the node moves its wire endpoints too (wires reference it)
+        this.drag.c[anchor] = { x: p.x, y: p.y };
+        if (!this.drag.isGate) this.drag.target = nearestSnapIndex(this.snapPoints(), p);
       }
     });
 
@@ -109,7 +123,7 @@ export class VehicleEditor {
         const d = this.drag;
         this.drag = null;
         this.dragConsumed = true; // suppress the follow-up click event
-        if (d.moved) this.snapInPlace(d.c, d.target);
+        if (d.moved && !d.isGate) this.snapInPlace(d.c, d.target); // gates float free
         this.selectedComp = d.c.id;
         this.selectedWire = null;
         this.refresh();
@@ -119,6 +133,10 @@ export class VehicleEditor {
     this.canvas.addEventListener('click', e => {
       if (this.dragConsumed) { this.dragConsumed = false; return; }
       const p = this.toLocal(e);
+      if (this.placingGate) {
+        this.placeGate(this.placingGate, p); // one placement per click, free position
+        return;
+      }
       if (this.placing) {
         const idx = nearestSnapIndex(this.snapPoints(), p, 45);
         if (idx >= 0) {
@@ -129,11 +147,13 @@ export class VehicleEditor {
       }
       // select component or wire
       const c = this.hitComponent(p);
-      this.selectedComp = c ? c.id : null;
-      if (!c) {
-        this.selectedWire = this.hitWire(p);
-      } else {
+      if (c) {
+        this.selectedComp = c.id;
         this.selectedWire = null;
+      } else {
+        const g = this.hitGate(p);
+        this.selectedComp = g ? g.id : null;
+        this.selectedWire = g ? null : this.hitWire(p);
       }
       this.refresh();
     });
@@ -149,8 +169,16 @@ export class VehicleEditor {
 
   setPlacing(type) {
     this.placing = type;
+    const mainDefs = this.componentsConfig.filter(d => d.category !== 'logic');
     this.ui.palette.querySelectorAll('button').forEach((b, i) =>
-      b.classList.toggle('placing', type === this.componentsConfig[i].id));
+      b.classList.toggle('placing', type === mainDefs[i]?.id));
+  }
+
+  setPlacingGate(type) {
+    this.placingGate = type;
+    const gateDefs = this.componentsConfig.filter(d => d.category === 'logic');
+    (this.ui.gatePalette?.querySelectorAll('button') ?? []).forEach((b, i) =>
+      b.classList.toggle('placing', type === gateDefs[i]?.id));
   }
 
   _scale() { return this._viewScale || 1; }
@@ -186,8 +214,8 @@ export class VehicleEditor {
     // rough hit test: distance from point to the wire's midpoint region
     let best = -1, bd = 12;
     this.state.vehicle.wires.forEach((w, i) => {
-      const a = this.comp(w.from.componentId)?.local;
-      const b = this.comp(w.to.componentId)?.local;
+      const a = this.anchorFor(w.from.componentId);
+      const b = this.anchorFor(w.to.componentId);
       if (!a || !b) return;
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 24;
       const d = Math.hypot(mx - p.x, my - p.y);
@@ -221,6 +249,62 @@ export class VehicleEditor {
     this.refresh();
   }
 
+  // ---- logic gates (floating nodes in vehicle.logicGates, not body parts) ----
+  gate(id) { return (this.state.vehicle.logicGates ?? []).find(g => g.id === id); }
+
+  // Anchor point for any node that a wire can reference: a body component's
+  // `.local` or a logic gate's `.pos`. Lets the wire renderer resolve both.
+  // Fixed size for every gate box so the drawn symbol and wire anchors agree.
+  gateBox() { return { w: 30, h: 14 }; }
+
+  // Point (vehicle-local) of a gate's connection stub. Inputs sit on the left
+  // edge (spread vertically, one per input port); the output sits on the right.
+  gateAnchor(g, port) {
+    const { w, h } = this.gateBox();
+    if (port === 'out') return { x: g.pos.x + w / 2 + 5, y: g.pos.y };
+    const inPorts = (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in');
+    const idx = Math.max(0, inPorts.findIndex(p => p.id === port));
+    const y = inPorts.length <= 1 ? 0 : -h / 4 + idx * (h / 2);
+    return { x: g.pos.x - w / 2 - 5, y: g.pos.y + y };
+  }
+
+  // Anchor for a wire endpoint. For a gate with a known port, returns that
+  // connection's stub (not the centre); without a port, the gate centre.
+  anchorFor(id, port) {
+    const c = this.comp(id);
+    if (c) return c.local;
+    const g = this.gate(id);
+    if (!g) return null;
+    return port ? this.gateAnchor(g, port) : { x: g.pos.x, y: g.pos.y };
+  }
+
+  hitGate(p) {
+    for (let i = (this.state.vehicle.logicGates ?? []).length - 1; i >= 0; i--) {
+      const g = this.state.vehicle.logicGates[i];
+      if (Math.hypot(g.pos.x - p.x, g.pos.y - p.y) < 16) return g;
+    }
+    return null;
+  }
+
+  placeGate(type, pos) {
+    const v = this.state.vehicle;
+    v.logicGates = v.logicGates ?? [];
+    const c = { id: `gate_${this.nextNum++}`, type, pos };
+    v.logicGates.push(c);
+    this.selectedComp = c.id;
+    this.selectedWire = null;
+    this.setPlacingGate(null);
+    this.refresh();
+  }
+
+  removeGate(id) {
+    const v = this.state.vehicle;
+    v.logicGates = (v.logicGates ?? []).filter(g => g.id !== id);
+    v.wires = v.wires.filter(w => w.from.componentId !== id && w.to.componentId !== id);
+    if (this.selectedComp === id) this.selectedComp = null;
+    this.refresh();
+  }
+
   removeComponent(id) {
     const v = this.state.vehicle;
     v.components = v.components.filter(c => c.id !== id);
@@ -229,27 +313,13 @@ export class VehicleEditor {
     this.refresh();
   }
 
-  addWire() {
-    const fromId = this.ui.wireFrom.value;
-    const toId = this.ui.wireTo.value;
-    if (!fromId || !toId) return;
-    this.state.vehicle.wires.push({
-      id: `wire_${Date.now().toString(36)}`,
-      from: { componentId: fromId, port: 'out' },
-      to: { componentId: toId, port: 'drive' },
-      weight: Number(this.ui.wireWeightRange.value),
-    });
-    this.refresh();
-  }
-
   refresh() {
     const v = this.state.vehicle;
 
-    // palette dropdowns for wiring
-    const sensors = v.components.filter(c => this.compDef(c.type)?.category === 'sensor');
-    const wheels = v.components.filter(c => this.compDef(c.type)?.category === 'actuator');
-    fillSelect(this.ui.wireFrom, sensors, c => `${c.id} (${c.type})`);
-    fillSelect(this.ui.wireTo, wheels, c => `${c.id} (${c.type})`);
+    // Body color lives in the left palette (the old global Wiring box is gone —
+    // wiring is now done per-part via the connection slots in the inspector).
+    this.ui.bodyColor.innerHTML = `<div class="color-palette">${colorPaletteHtml(v.body.color)}</div>`;
+    this._bindBodyColor(this.ui.bodyColor, v);
 
     // placed list
     const pl = this.ui.placedList;
@@ -260,6 +330,16 @@ export class VehicleEditor {
       li.innerHTML = `<span>${c.id} · ${this.compDef(c.type)?.name}</span><button class="del" title="remove">✕</button>`;
       li.onclick = () => { this.selectedComp = c.id; this.selectedWire = null; this.refresh(); };
       li.querySelector('.del').onclick = e => { e.stopPropagation(); this.removeComponent(c.id); };
+      pl.appendChild(li);
+    }
+
+    // logic gates (floating, non-snapped) listed after body components
+    for (const g of v.logicGates ?? []) {
+      const li = document.createElement('li');
+      if (g.id === this.selectedComp) li.classList.add('sel');
+      li.innerHTML = `<span>${g.id} · ${this.compDef(g.type)?.name ?? g.type}</span><button class="del" title="remove">✕</button>`;
+      li.onclick = () => { this.selectedComp = g.id; this.selectedWire = null; this.refresh(); };
+      li.querySelector('.del').onclick = e => { e.stopPropagation(); this.removeGate(g.id); };
       pl.appendChild(li);
     }
 
@@ -288,25 +368,51 @@ export class VehicleEditor {
   renderInspector() {
     const box = this.ui.inspector;
     const v = this.state.vehicle;
-    const c = this.selectedComp ? this.comp(this.selectedComp) : null;
-
-    // Vehicle-level row: body color — always shown so it's visible even when
-    // nothing is selected (and so the motion trail matches the vehicle). A static
-    // 4x4 palette (no native <input type="color">) means clicking a swatch just
-    // sets the color and re-renders; there's no popup that closes on click.
-    let html = `<h3>Body</h3><label>Body color</label><div class="color-palette">${colorPaletteHtml(v.body.color)}</div>`;
-
-    if (!c) {
-      box.innerHTML = html;
-      this._bindBodyColor(box, v);
-      return;
-    }
+    const c = this.selectedComp ? (this.comp(this.selectedComp) ?? this.gate(this.selectedComp)) : null;
 
     // Build the whole panel as one string and assign innerHTML ONCE, then bind
-    // handlers. (Incremental `box.innerHTML += …` replaces the DOM each time
-    // and silently drops any event handler bound to an earlier node — this is
-    // what used to clobber the Range input's onchange.)
+    // handlers. (Body color now lives in the left palette, not here.)
+    let html = '';
+    if (!c) {
+      box.innerHTML = '<p class="hint">Select a placed part to edit it and its wiring.</p>';
+      return;
+    }
     html += `<h3>Selected</h3>`;
+    const def = this.compDef(c.type);
+    if (this.gate(c.id)) {
+      html += `<p class="hint"><b>${def?.name ?? c.type}</b> — ${gateLogicDesc(c.type)}</p>`;
+    }
+
+    // Connection slots: one "In" selector per input port (pick a signal source)
+    // and one "Out" selector per output port (pick a destination). Uniform for
+    // sensors (1 out), motors (1 in) and gates (N in + 1 out) — this replaces the
+    // old global Wiring box. Choosing a value creates/replaces that wire.
+    const ports = def?.ports ?? [];
+    const inPorts = ports.filter(p => p.kind === 'actuator_input' || p.kind === 'logic_in');
+    const outPorts = ports.filter(p => p.kind === 'sensor_output' || p.kind === 'logic_out');
+    if (inPorts.length || outPorts.length) {
+      const allGates = v.logicGates ?? [];
+      const srcOpts = [
+        ...v.components.filter(x => this.compDef(x.type)?.category === 'sensor').map(x => ({ id: x.id, label: `${x.id} · ${this.compDef(x.type).name ?? x.type} (out)` })),
+        ...allGates.filter(g => g.id !== c.id).map(g => ({ id: g.id, label: `${g.id} · ${this.compDef(g.type)?.name ?? g.type} (out)` })),
+      ];
+      const dstOpts = [
+        ...v.components.filter(x => this.compDef(x.type)?.category === 'actuator').map(x => ({ id: `act|${x.id}`, label: `${x.id} · ${this.compDef(x.type).name ?? x.type}` })),
+        ...allGates.flatMap(g => g.id === c.id ? [] : (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in').map(p => ({ id: `gin|${g.id}|${p.id}`, label: `${g.id} · ${this.compDef(g.type)?.name ?? g.type} (in ${p.id.slice(2)})` }))),
+      ];
+      const srcInto = port => v.wires.find(w => w.to.componentId === c.id && w.to.port === port)?.from.componentId ?? '';
+      const dstOfOut = port => { const w = v.wires.find(w => w.from.componentId === c.id && w.from.port === port); return w ? (w.to.port === 'drive' ? `act|${w.to.componentId}` : `gin|${w.to.componentId}|${w.to.port}`) : ''; };
+      const opt = (list, cur) => '<option value="">— none —</option>' + list.map(o => `<option value="${o.id}"${o.id === cur ? ' selected' : ''}>${o.label}</option>`).join('');
+      html += `<div class="conn" data-ins="${inPorts.length}" data-outs="${outPorts.length}">` +
+        inPorts.map(p => `<label>In <select id="conn-in-${p.id}">${opt(srcOpts, srcInto(p.id))}</select></label>`).join('') +
+        outPorts.map(p => `<label>Out <select id="conn-out-${p.id}">${opt(dstOpts, dstOfOut(p.id))}</select></label>`).join('') +
+        `</div>`;
+    }
+    if (this.compDef(c.type)?.category === 'sensor') {
+      const dig = !!c.props?.digital;
+      html += `<label class="check"><input type="checkbox" id="ins-digital"${dig ? ' checked' : ''}> Digital (0/1 for gates)</label>`;
+      html += `<label>Digital threshold <input type="number" id="ins-dthresh" min="0" max="1" step="0.05" value="${c.props?.threshold ?? 0.5}"></label>`;
+    }
     if (typeof c.aimAngle === 'number') {
       html += `<label>Aim (rad) <input type="number" id="ins-aim" step="0.1" value="${c.aimAngle.toFixed(2)}"></label>`;
     }
@@ -350,9 +456,36 @@ export class VehicleEditor {
     // Now bind — every control still exists because the DOM wasn't rebuilt.
     box.querySelector('#ins-aim')?.addEventListener('change', e => { c.aimAngle = Number(e.target.value); this.refresh(); });
     box.querySelector('#ins-range')?.addEventListener('change', e => { c.props.range = Math.max(1, Number(e.target.value) || 1); this.refresh(); });
+    box.querySelector('#ins-digital')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.digital = e.target.checked; this.refresh(); });
+    box.querySelector('#ins-dthresh')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.threshold = Math.max(0, Number(e.target.value) || 0); this.refresh(); });
     box.querySelector('#ins-fov')?.addEventListener('change', e => { c.props.fov = (Math.min(360, Math.max(0, Number(e.target.value) || 0))) * Math.PI / 180; this.refresh(); });
     box.querySelector('#ins-thresh')?.addEventListener('change', e => { c.props.threshold = Math.max(0.001, Number(e.target.value) || 0.001); this.refresh(); });
     box.querySelector('#ins-pol')?.addEventListener('change', e => { c.polarity = e.target.value; this.refresh(); });
+
+    // connection slots: selecting a source/destination creates (or replaces) the
+    // single wire on that endpoint. Works for every ported part (sensor/motor/gate).
+    {
+      const pdef = this.compDef(c.type)?.ports ?? [];
+      const wireId = () => `wire_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      pdef.filter(p => p.kind === 'actuator_input' || p.kind === 'logic_in').forEach(p => {
+        box.querySelector('#conn-in-' + p.id)?.addEventListener('change', e => {
+          v.wires = v.wires.filter(w => !(w.to.componentId === c.id && w.to.port === p.id));
+          if (e.target.value) v.wires.push({ id: wireId(), from: { componentId: e.target.value, port: 'out' }, to: { componentId: c.id, port: p.id }, weight: 1 });
+          this.refresh();
+        });
+      });
+      pdef.filter(p => p.kind === 'sensor_output' || p.kind === 'logic_out').forEach(p => {
+        box.querySelector('#conn-out-' + p.id)?.addEventListener('change', e => {
+          v.wires = v.wires.filter(w => !(w.from.componentId === c.id && w.from.port === p.id));
+          if (e.target.value) {
+            const [kind, a, b] = e.target.value.split('|');
+            const to = kind === 'act' ? { componentId: a, port: 'drive' } : { componentId: a, port: b };
+            v.wires.push({ id: wireId(), from: { componentId: c.id, port: p.id }, to, weight: 1 });
+          }
+          this.refresh();
+        });
+      });
+    }
     const mpEl = box.querySelector('#ins-mp');
     if (mpEl) {
       mpEl.addEventListener('input', e => { c.props.motorPower = Number(e.target.value); box.querySelector('#ins-mp-v').textContent = (+e.target.value).toFixed(2); });
@@ -435,6 +568,37 @@ export class VehicleEditor {
       }
     });
 
+    // logic gates: amber boxes sized to their label (text never overflows),
+    // with short input stubs on the LEFT and an output stub on the RIGHT so the
+    // signal-flow direction is obvious at a glance.
+    for (const g of v.logicGates ?? []) {
+      const sel = g.id === this.selectedComp;
+      const label = this.compDef(g.type)?.name ?? g.type;
+      ctx.save();
+      ctx.translate(g.pos.x, g.pos.y);
+      ctx.font = '7px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const { w, h } = this.gateBox();
+      // input stubs (left) — one per input port; output stub (right)
+      const inPorts = (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in');
+      ctx.strokeStyle = '#7a5b12';
+      ctx.lineWidth = 1;
+      inPorts.forEach((p, i) => {
+        const y = inPorts.length <= 1 ? 0 : -h / 4 + i * (h / 2);
+        ctx.beginPath(); ctx.moveTo(-w / 2 - 5, y); ctx.lineTo(-w / 2, y); ctx.stroke();
+      });
+      ctx.beginPath(); ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2 + 5, 0); ctx.stroke();
+      ctx.fillStyle = 'rgba(255, 176, 32, 0.9)';
+      ctx.strokeStyle = sel ? '#ffffff' : 'rgba(122, 91, 18, 0.6)';
+      ctx.lineWidth = sel ? 2 : 1;
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+      ctx.strokeRect(-w / 2, -h / 2, w, h);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+    }
+
     // components (wheels draw as top-down rects; sensors/mounts as circles)
     for (const c of v.components) {
       const def = this.compDef(c.type);
@@ -516,8 +680,8 @@ export class VehicleEditor {
 
     // wires: arcing lines (polarity now lives on the components)
     for (const w of v.wires) {
-      const a = this.comp(w.from.componentId)?.local;
-      const b = this.comp(w.to.componentId)?.local;
+      const a = this.anchorFor(w.from.componentId, w.from.port);
+      const b = this.anchorFor(w.to.componentId, w.to.port);
       if (!a || !b) continue;
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 28;
       ctx.beginPath();
@@ -547,17 +711,16 @@ function drawArrow(ctx, x, y, angle) {
   ctx.restore();
 }
 
-function fillSelect(sel, items, label) {
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">—</option>';
-  for (const it of items) {
-    const o = document.createElement('option');
-    o.value = it.id;
-    o.textContent = label(it);
-    sel.appendChild(o);
-  }
-  if (items.some(i => i.id === prev)) sel.value = prev;
-}
+// One-line truth-behaviour for each gate, shown in the inspector on selection.
+const GATE_LOGIC = {
+  gate_and: 'output is HIGH only when every input is HIGH.',
+  gate_or: 'output is HIGH when any input is HIGH.',
+  gate_nand: 'inverted AND — output is LOW only when every input is HIGH.',
+  gate_nor: 'inverted OR — output is HIGH only when every input is LOW.',
+  gate_xor: 'output is HIGH when the inputs differ (an odd number of HIGH inputs).',
+  gate_not: 'inverts its single input (HIGH\u2192LOW, LOW\u2192HIGH).',
+};
+const gateLogicDesc = type => GATE_LOGIC[type] ?? '';
 
 import { generateSnapPoints } from '../src/models/snapPoints.js';
 import { validateWiring } from '../src/models/wiring.js';

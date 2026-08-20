@@ -60,6 +60,66 @@
       "shape": "circle",
       "ports": [],
       "defaults": {}
+    },
+    {
+      "id": "gate_and",
+      "name": "AND",
+      "category": "logic",
+      "mass": 0,
+      "size": 26,
+      "shape": "rect",
+      "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "in1", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
+      "defaults": {}
+    },
+    {
+      "id": "gate_or",
+      "name": "OR",
+      "category": "logic",
+      "mass": 0,
+      "size": 26,
+      "shape": "rect",
+      "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "in1", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
+      "defaults": {}
+    },
+    {
+      "id": "gate_nand",
+      "name": "NAND",
+      "category": "logic",
+      "mass": 0,
+      "size": 26,
+      "shape": "rect",
+      "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "in1", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
+      "defaults": {}
+    },
+    {
+      "id": "gate_nor",
+      "name": "NOR",
+      "category": "logic",
+      "mass": 0,
+      "size": 26,
+      "shape": "rect",
+      "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "in1", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
+      "defaults": {}
+    },
+    {
+      "id": "gate_xor",
+      "name": "XOR",
+      "category": "logic",
+      "mass": 0,
+      "size": 26,
+      "shape": "rect",
+      "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "in1", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
+      "defaults": {}
+    },
+    {
+      "id": "gate_not",
+      "name": "NOT",
+      "category": "logic",
+      "mass": 0,
+      "size": 26,
+      "shape": "rect",
+      "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
+      "defaults": {}
     }
   ]
 }

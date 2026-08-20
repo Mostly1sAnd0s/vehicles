@@ -112,18 +112,16 @@ try {
       // offset = wheel size 16 + 3, along outward normal (0,-1) -> y = -20 - 19
       const localOk = Math.abs(newComp.local.x - snapLocalX) < 0.5 && Math.abs(newComp.local.y - (-39)) < 0.5;
 
-      // wire: pick first sensor -> this new wheel
-      const fromSel = document.getElementById('wire-from');
-      const toSel = document.getElementById('wire-to');
-      fromSel.value = 'sL';
-      toSel.value = newComp.id;
-      document.getElementById('add-wire').click();
+      // wire via the wheel's own connection slot: pick a signal source (sensor)
+      const inSel = document.querySelector('#inspector #conn-in-drive');
+      if (inSel) { inSel.value = 'sL'; inSel.dispatchEvent(new Event('change')); }
       const wireOk = v.wires.some(w => w.from.componentId === 'sL' && w.to.componentId === newComp.id);
       const errors = document.getElementById('wiring-errors').textContent;
 
-      // duplicate wire must be rejected by validation
-      document.getElementById('add-wire').click();
-      const dupReported = document.getElementById('wiring-errors').textContent.includes('duplicate');
+      // re-picking the same source replaces (not duplicates) that wire
+      const inSel2 = document.querySelector('#inspector #conn-in-drive');
+      if (inSel2) { inSel2.value = 'sL'; inSel2.dispatchEvent(new Event('change')); }
+      const noDup = v.wires.filter(w => w.from.componentId === 'sL' && w.to.componentId === newComp.id).length === 1;
 
       // ---- drag sR to a different snap node: it must snap in place and its wire must follow ----
       const sr = v.components.find(c => c.id === 'sR');
@@ -146,7 +144,7 @@ try {
       const aimOk = Math.abs(sr.aimAngle - -Math.PI / 2) < 1e-6;
       const wireFollows = v.wires.some(w => w.from.componentId === 'sR');
 
-      res({ placedAfter, localOk, wireOk, errors, dupReported, dragOk, aimOk, wireFollows });
+      res({ placedAfter, localOk, wireOk, errors, noDup, dragOk, aimOk, wireFollows });
     } catch (e) { res({ error: e.stack }); }
   }, 500))`);
 
@@ -155,7 +153,7 @@ try {
   if (!result.localOk) fail('component not placed at snap point: ' + JSON.stringify(result));
   if (!result.wireOk) fail('wire not created');
   if (result.errors !== '') fail('unexpected validation errors on first wire: ' + result.errors);
-  if (!result.dupReported) fail('duplicate connection not reported by validator');
+  if (!result.noDup) fail('re-picking the same source duplicated the wire instead of replacing it');
   if (!result.dragOk) fail('dragged component did not snap to the target node: ' + JSON.stringify(result));
   if (!result.aimOk) fail('sensor aim not re-aimed along node normal after drag');
   if (!result.wireFollows) fail('wire did not follow its dragged sensor');
@@ -166,7 +164,7 @@ try {
   const picker = await evalJs(`
     (() => {
       const app = window.__app();
-      const box = document.querySelector('#inspector');
+      const box = document.querySelector('#body-color'); // body palette moved to the left panel
       const swatches = [...box.querySelectorAll('.color-palette .swatch')];
       const hasNative = !!box.querySelector('input[type="color"]');
       const before = app.state.vehicle.body.color;
@@ -276,7 +274,112 @@ try {
   if (vds.aimIsNum !== true) fail('editor: detection sensor should have a numeric aimAngle ' + JSON.stringify(vds));
   if (vds.fovAfterDeg !== 90) fail('editor: editing FOV did not update props.fov, expected 90deg got ' + vds.fovAfterDeg);
 
-  ok('editor: placed at snap point, wired, duplicate detected, drag-snapped sR with wire following; 4x4 body-color picker works + editor canvas shows the color; vehicle-detection sensor placeable with Aim+Range+FOV');
+  // --- LOGIC GATES IN THE EDITOR: a NOT gate is placeable from its own palette,
+  //     stored as a floating logicGates node (not a body component), and can be
+  //     wired sensor->gate.in0 and gate.out->wheel with valid ports. A selected
+  //     sensor exposes a Digital toggle so its reading coerces to 0/1 for gates.
+  const gtest = await evalJs(`
+    (() => {
+      const app = window.__app();
+      const v = app.state.vehicle;
+      const canvas = document.getElementById('editor-canvas');
+      const rect = canvas.getBoundingClientRect();
+      const scale = Math.min(rect.width / 320, rect.height / 240);
+      const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+      const pt = { x: cx + 60 * scale, y: cy + 40 * scale };
+
+      const gbtns = [...document.querySelectorAll('#gate-palette button')];
+      const notBtn = gbtns.find(b => b.textContent.includes('NOT'));
+      if (!notBtn) return { error: 'no logic gates in #gate-palette', labels: gbtns.map(b => b.textContent.trim()) };
+
+      // absorb any stale dragConsumed left by the earlier sR-drag phase
+      canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+      canvas.dispatchEvent(new MouseEvent('click', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+
+      // enter placing-gate mode, then place at a free local point
+      notBtn.click();
+      canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+      canvas.dispatchEvent(new MouseEvent('click', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+      const gate = (v.logicGates || [])[v.logicGates.length - 1];
+      if (!gate) return { error: 'NOT gate was not placed into logicGates' };
+
+      const sensor = v.components.find(c => c.type === 'light_sensor' || c.type === 'vehicle_detection_sensor');
+      const wheel = v.components.find(c => c.type === 'powered_wheel');
+      if (!sensor || !wheel) return { error: 'need a sensor + powered_wheel to wire the gate', comps: v.components.map(c => c.type) };
+
+      // wire the NOT gate via its own connection slots (auto-selected on place)
+      let nIn = document.querySelector('#inspector #conn-in-in0');
+      if (nIn) { nIn.value = sensor.id; nIn.dispatchEvent(new Event('change')); }
+      let nOut = document.querySelector('#inspector #conn-out-out');
+      if (nOut) { nOut.value = 'act|' + wheel.id; nOut.dispatchEvent(new Event('change')); }
+
+      const w1 = v.wires.find(w => w.from.componentId === sensor.id && w.to.componentId === gate.id);
+      const w2 = v.wires.find(w => w.from.componentId === gate.id && w.to.componentId === wheel.id);
+      const wiresOk = !!(w1 && w1.to.port === 'in0' && w2 && w2.from.port === 'out');
+      const errors = document.getElementById('wiring-errors').textContent;
+      const gateErrorFree = !errors.includes(gate.id);
+      const diag = {};
+
+      // ---- ARITY + PER-GATE CONNECTION SLOTS: place an AND gate and confirm the
+      //      selected-gate inspector exposes exactly two input selectors + one
+      //      output selector, and that driving them creates correctly-ported wires.
+      let andInputs = false, noExtraIn = true, andOut = false, andSlotWiresOk = false;
+      const andBtn = gbtns.find(b => b.textContent.trim() === 'AND');
+      if (andBtn) {
+        const pt2 = { x: cx - 60 * scale, y: cy + 90 * scale };
+        andBtn.click(); // enter placing-gate mode
+        canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: pt2.x, clientY: pt2.y, bubbles: true }));
+        canvas.dispatchEvent(new MouseEvent('click', { clientX: pt2.x, clientY: pt2.y, bubbles: true }));
+        const andGate = (v.logicGates || []).find(g => g.type === 'gate_and');
+        Object.assign(diag, { gateTypes: (v.logicGates||[]).map(g=>g.type), connInputs: document.querySelector('#inspector .conn')?.dataset.ins ?? 'none' });
+        if (andGate) {
+          let box = document.querySelector('#inspector'); // AND is auto-selected on place
+          const hasIn0 = !!box.querySelector('#conn-in-in0');
+          const hasIn1 = !!box.querySelector('#conn-in-in1');
+          andInputs = !!(hasIn0 && hasIn1);
+          noExtraIn = !document.querySelector('#conn-in-in2');
+          andOut = !!box.querySelector('#conn-out-out');
+          // drive the slots; each change rebuilds the inspector, so re-query.
+          let s0 = box.querySelector('#conn-in-in0'); s0.value = sensor.id; s0.dispatchEvent(new Event('change'));
+          let s1 = document.querySelector('#conn-in-in1'); s1.value = gate.id; s1.dispatchEvent(new Event('change')); // feed in1 from the NOT gate's out
+          let so = document.querySelector('#conn-out-out'); so.value = 'act|' + wheel.id; so.dispatchEvent(new Event('change'));
+          const a0 = v.wires.find(w => w.to.componentId === andGate.id && w.to.port === 'in0');
+          const a1 = v.wires.find(w => w.to.componentId === andGate.id && w.to.port === 'in1');
+          const ao = v.wires.find(w => w.from.componentId === andGate.id && w.from.port === 'out');
+          andSlotWiresOk = !!(a0 && a0.from.componentId === sensor.id && a1 && a1.from.componentId === gate.id && ao && ao.to.componentId === wheel.id && ao.to.port === 'drive');
+        }
+      }
+
+      // select the sensor and confirm a Digital toggle is exposed + functional
+      const li = [...document.querySelectorAll('#placed-list li')].find(x => x.textContent.includes(sensor.id));
+      let hasDigital = false, digitalSetOk = false;
+      if (li) {
+        li.click();
+        const box = document.querySelector('#inspector');
+        const dt = box.querySelector('#ins-digital');
+        hasDigital = !!dt;
+        if (dt) {
+          const before = sensor.props ? !!sensor.props.digital : false;
+          dt.checked = !before;
+          dt.dispatchEvent(new Event('change'));
+          digitalSetOk = (sensor.props && !!sensor.props.digital) === (!before);
+        }
+      }
+      return { gateType: gate.type, wiresOk, gateErrorFree, andInputs, noExtraIn, andOut, andSlotWiresOk, hasDigital, digitalSetOk, errors, diag };
+    })()
+  `);
+  if (gtest.error) fail('logic gates: ' + gtest.error + ' ' + JSON.stringify(gtest.labels || gtest.comps));
+  if (gtest.gateType !== 'gate_not') fail('logic gates: placed gate type should be gate_not, got ' + gtest.gateType);
+  if (!gtest.wiresOk) fail('logic gates: sensor->gate.in0 and gate.out->wheel wires not created with correct ports ' + JSON.stringify(gtest));
+  if (!gtest.gateErrorFree) fail('logic gates: validation reported an error for the new gate ' + gtest.errors);
+  if (!gtest.andInputs) fail('logic gates: AND gate did not expose two input slots ' + JSON.stringify(gtest.diag));
+  if (!gtest.noExtraIn) fail('logic gates: a 2-input gate must not show a third input slot');
+  if (!gtest.andOut) fail('logic gates: a selected AND gate must expose one output connection slot');
+  if (!gtest.andSlotWiresOk) fail('logic gates: driving the per-gate input/output slots did not create correctly-ported wires ' + JSON.stringify(gtest));
+  if (!gtest.hasDigital) fail('logic gates: a selected sensor must expose a Digital toggle in the inspector');
+  if (!gtest.digitalSetOk) fail('logic gates: toggling Digital did not set the sensor props.digital');
+
+  ok('editor: placed at snap point, wired, drag-snapped sR with wire following; 4x4 body-color picker works + editor canvas shows the color; vehicle-detection sensor placeable with Aim+Range+FOV; logic gates placeable + per-gate connection slots match arity (AND = 2 in + 1 out) + drive correctly-ported wires + per-sensor digital toggle');
 } catch (e) {
   fail(e.stack ?? String(e));
 }
