@@ -163,6 +163,11 @@ export class WorldSim {
     }
 
     const snapshot = worldElementsToSnapshot(this.worldDoc.elements);
+    // Fleet poses for vehicle-detection sensors: every instance's current world
+    // pose. Each sensor excludes itself by instanceId (see sampleSensors).
+    snapshot.vehicles = this.instances
+      .filter(i => i.body)
+      .map(i => ({ id: i.id, x: i.body.position.x, y: i.body.position.y, angle: i.body.angle }));
     const thrustScale = this.state.configs.app.defaults.thrustScale ?? 0.25;
     const actCfg = this.state.configs.actuators.powered_wheel;
     const allSamples = [];
@@ -170,7 +175,7 @@ export class WorldSim {
     for (const inst of this.instances) {
       const v = this.prototypeVehicle(inst.protoId);
       const pose = { x: inst.body.position.x, y: inst.body.position.y, angle: inst.body.angle };
-      const samples = evaluateVehicleSensors({ ...v, pose }, snapshot, this.state.configs.sensors);
+      const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.state.configs.sensors);
       inst.lastSamples = samples;
       allSamples.push(...samples.map(s => ({ ...s, instanceId: inst.id })));
 

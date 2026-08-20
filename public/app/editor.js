@@ -313,10 +313,14 @@ export class VehicleEditor {
     if (typeof c.props?.range === 'number') {
       html += `<label>Range <input type="number" id="ins-range" min="1" value="${c.props.range}"></label>`;
     }
-    if (c.type === 'light_sensor') {
-      const fovDefault = this.state.configs?.sensors?.light?.fov ?? 2 * Math.PI;
-      const fovRad = c.props?.fov ?? fovDefault;
+    const fovSensor = c.type === 'light_sensor' || c.type === 'vehicle_detection_sensor';
+    if (fovSensor) {
+      const modelKey = c.type === 'light_sensor' ? 'light' : 'vehicle_detection';
+      const cfgFov = this.state.configs?.sensors?.[modelKey]?.fov ?? 2 * Math.PI;
+      const fovRad = c.props?.fov ?? cfgFov;
       html += `<label>FOV (&deg;) <input type="number" id="ins-fov" min="0" max="360" step="5" value="${Math.round(fovRad * 180 / Math.PI)}"></label>`;
+    }
+    if (c.type === 'light_sensor') {
       const lightCfg = this.state.configs?.sensors?.light ?? {};
       const thresh = c.props?.threshold ?? lightCfg.detectionThreshold ?? 0.02;
       html += `<label>Threshold <input type="number" id="ins-thresh" min="0.001" step="0.005" value="${thresh}"></label>`;
@@ -458,6 +462,33 @@ export class VehicleEditor {
       if (typeof c.aimAngle === 'number') {
         const r = s.kind === 'circle' ? s.radius : Math.max(s.along, s.lateral) / 2;
         drawArrow(ctx, c.local.x + Math.cos(c.aimAngle) * (r + 10), c.local.y + Math.sin(c.aimAngle) * (r + 10), c.aimAngle);
+      }
+
+      // FOV cone preview for cone sensors (vehicle detection by default; any
+      // sensor the user narrows below omni). Shows the aiming arc while placing.
+      // Omni sensors (e.g. the default light sensor) draw nothing, as before.
+      if (typeof c.aimAngle === 'number' && def?.category === 'sensor') {
+        const fov = c.props?.fov;
+        if (Number.isFinite(fov) && fov < 2 * Math.PI - 1e-3) {
+          const reach = Math.max(40, Math.min(c.props?.range ?? 120, v.body.width * 1.6));
+          const half = Math.min(fov / 2, Math.PI);
+          const cx = c.local.x, cy = c.local.y;
+          ctx.beginPath();
+          if (half >= Math.PI - 1e-3) {
+            ctx.arc(cx, cy, reach, 0, 2 * Math.PI);
+          } else {
+            const a1 = c.aimAngle - half, a2 = c.aimAngle + half;
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(a1) * reach, cy + Math.sin(a1) * reach);
+            ctx.arc(cx, cy, reach, a1, a2);
+          }
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(90,240,170,0.12)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(90,240,170,0.5)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
       }
     }
 

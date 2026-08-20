@@ -137,13 +137,18 @@ export function drawWorld(sim) {
           if (!comp?.local) continue;
           const p = toWorld(comp.local);
           let txt;
+          let col = '#ffd479';
           if (comp.type.startsWith('light') && s.lightLevel !== undefined) {
             const dTxt = s.lightDistance != null ? ` d\u2248${Math.round(s.lightDistance)}` : '';
             txt = `L ${s.lightLevel.toFixed(2)}\u2192${s.value.toFixed(2)}${dTxt}`;
+          } else if (comp.type === 'vehicle_detection_sensor') {
+            const dTxt = s.detected && s.detectedDistance != null ? ` d\u2248${Math.round(s.detectedDistance)}` : '';
+            txt = `V ${s.detected ? 1 : 0}${dTxt}`;
+            col = s.detected ? '#8dffbe' : '#ffd479';
           } else {
             txt = `${comp.type.startsWith('distance') ? 'D' : '?'} ${s.value.toFixed(2)}`;
           }
-          label(p.x + 8, p.y - 9, txt, '#ffd479');
+          label(p.x + 8, p.y - 9, txt, col);
         }
         for (const m of inst.lastMotors ?? []) {
           const p = toWorld(m.local);
@@ -156,6 +161,49 @@ export function drawWorld(sim) {
     // sensor beams
     if (sim.beams) {
       for (const s of sim.lastSamples) {
+        // Vehicle-detection sensor: a cone whose aperture IS its FOV and whose
+        // length IS its full range. Faint green when idle, bright when it is
+        // actually seeing another vehicle, plus a line + ring to that target.
+        if (s.kind === 'vehicle') {
+          const vfov = s.fov === undefined || !Number.isFinite(s.fov) ? 2 * Math.PI : s.fov;
+          const reach = s.effectiveRange ?? s.range ?? 0;
+          const sx = s.samplePoint.x, sy = s.samplePoint.y;
+          if (reach > 0) {
+            const half = Math.min(vfov / 2, Math.PI);
+            const on = s.detected ? 1 : 0;
+            const rgb = on ? '90,240,170' : '120,205,165';
+            const alpha = 0.12 + 0.6 * on;
+            ctx.beginPath();
+            if (half >= Math.PI - 1e-3) {
+              ctx.arc(sx, sy, reach, 0, 2 * Math.PI);
+            } else {
+              const a1 = s.direction - half, a2 = s.direction + half;
+              ctx.moveTo(sx, sy);
+              ctx.lineTo(sx + Math.cos(a1) * reach, sy + Math.sin(a1) * reach);
+              ctx.arc(sx, sy, reach, a1, a2);
+            }
+            ctx.closePath();
+            ctx.fillStyle = `rgba(${rgb},${(alpha * 0.2).toFixed(3)})`;
+            ctx.fill();
+            ctx.strokeStyle = `rgba(${rgb},${alpha.toFixed(3)})`;
+            ctx.lineWidth = 1 + 1.5 * on;
+            ctx.stroke();
+          }
+          if (s.detected && s.detectedTarget) {
+            const t = s.detectedTarget;
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(t.x, t.y);
+            ctx.strokeStyle = 'rgba(120,255,190,0.75)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, 6 + (s.detectedDistance ?? 0) * 0.05, 0, 2 * Math.PI);
+            ctx.strokeStyle = 'rgba(120,255,190,0.9)';
+            ctx.stroke();
+          }
+          continue;
+        }
         const isLight = s.effectiveRange !== undefined;
         let length;
         let level;

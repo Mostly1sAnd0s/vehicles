@@ -9,9 +9,10 @@
 import { vehicleToWorld } from '../models/vehicle.js';
 import { lightLevelNormalized, lightEffectiveRange } from '../sensors/light.js';
 import { castRay } from '../sensors/raycast.js';
+import { detectVehicle } from '../sensors/vehicleDetection.js';
 import { applySensorPolarity } from '../sensors/polarity.js';
 
-const SENSOR_TYPES = new Set(['light_sensor', 'distance_sensor']);
+const SENSOR_TYPES = new Set(['light_sensor', 'distance_sensor', 'vehicle_detection_sensor']);
 
 export function evaluateVehicleSensors(vehicle, world, sensorConfig) {
   const { pose } = vehicle;
@@ -59,8 +60,35 @@ export function evaluateVehicleSensors(vehicle, world, sensorConfig) {
         direction,
       });
       continue;
-    } else {
-      cfg = sensorConfig.distance ?? {};
+    }
+
+    if (c.type === 'vehicle_detection_sensor') {
+      // Same cone geometry as the light sensor (fov aperture on `direction`,
+      // hard cap at `range`), but the targets are the other vehicles' poses and
+      // the output is presence. effectiveRange = full range: there's no
+      // threshold falloff, so the whole cone is the sensing area.
+      const vcfg = sensorConfig.vehicle_detection ?? {};
+      const vrange = c.props?.range ?? vcfg.defaultRange ?? 300;
+      const vfov = c.props?.fov ?? vcfg.fov; // undefined -> omnidirectional
+      const { detected, distance, target } = detectVehicle(point, direction, vrange, vfov, world.vehicles ?? [], vehicle.instanceId);
+      value = applySensorPolarity(detected ? 1 : 0, c.polarity, 1);
+      samples.push({
+        componentId: c.id,
+        kind: 'vehicle',
+        value,
+        detected,
+        detectedDistance: distance,
+        detectedTarget: target,
+        effectiveRange: vrange,
+        fov: vfov,
+        range: vrange,
+        samplePoint: point,
+        direction,
+      });
+      continue;
+    }
+
+    cfg = sensorConfig.distance ?? {};
       const range = c.props?.range ?? cfg.defaultRange ?? 100;
       const hit = castRay(point, direction, range, world.obstacles ?? []);
       raw =
@@ -69,7 +97,6 @@ export function evaluateVehicleSensors(vehicle, world, sensorConfig) {
           : hit.hit
             ? hit.distance
             : 0;
-    }
 
     // sensor polarity: inverted sensors are active in the absence of signal
     value = applySensorPolarity(raw, c.polarity, cfg.inversionRef);

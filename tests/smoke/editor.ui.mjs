@@ -217,7 +217,66 @@ try {
   const needRun = Math.max(8, Math.floor(paint.w * 0.03));
   if (paint.longestRun < needRun) fail('editor body fill does not reflect the chosen color ' + JSON.stringify(paint.expect) + ': longest matching run ' + paint.longestRun + ' < ' + needRun + ' (matches ' + paint.matchCount + ')');
 
-  ok('editor: placed at snap point, wired, duplicate detected, drag-snapped sR with wire following; 4x4 body-color picker works + editor canvas shows the color');
+  // --- VEHICLE DETECTION SENSOR IN THE EDITOR: it must appear in the palette
+  //     (config-driven), place on a snap point with default FOV(180)/range(300),
+  //     and its inspector must expose Aim + Range + FOV (FOV is no longer light-only).
+  const vds = await evalJs(`
+    (() => {
+      const app = window.__app();
+      const v = app.state.vehicle;
+      const canvas = document.getElementById('editor-canvas');
+      const rect = canvas.getBoundingClientRect();
+      const scale = Math.min(rect.width / 320, rect.height / 240);
+      const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+
+      const btns = [...document.querySelectorAll('#palette button')];
+      const vdsBtn = btns.find(b => b.textContent.includes('Vehicle Detection Sensor'));
+      if (!vdsBtn) return { error: 'no Vehicle Detection Sensor in palette', labels: btns.map(b => b.textContent.trim()) };
+
+      // same proven top-edge snap as the wheel step: local (-40+80/3, -20); normal (0,-1) -> y = -20-11
+      const snapLocalX = -40 + 80 / 3;
+      const pt = { x: cx + snapLocalX * scale, y: cy + (-20) * scale };
+
+      // Absorb any stale dragConsumed left by the earlier sR-drag phase (a plain
+      // click while NOT placing just clears the flag; placeComponent is untouched).
+      canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+      canvas.dispatchEvent(new MouseEvent('click', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+
+      // enter placing mode, then place on the snap
+      vdsBtn.click();
+      canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+      canvas.dispatchEvent(new MouseEvent('click', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+
+      const comp = v.components[v.components.length - 1];
+      const fovDefaultDeg = Math.round(comp.props.fov * 180 / Math.PI); // capture default BEFORE editing
+      const box = document.querySelector('#inspector');
+      const hasAim = !!box.querySelector('#ins-aim');
+      const hasRange = !!box.querySelector('#ins-range');
+      const hasFov = !!box.querySelector('#ins-fov');
+      const fovInput = box.querySelector('#ins-fov');
+      if (fovInput) { fovInput.value = '90'; fovInput.dispatchEvent(new Event('change')); }
+      const fovAfterDeg = Math.round(comp.props.fov * 180 / Math.PI);
+      return {
+        type: comp.type,
+        range: comp.props.range,
+        fovDefaultDeg,
+        hasAim, hasRange, hasFov,
+        aimIsNum: typeof comp.aimAngle === 'number',
+        localOk: Math.abs(comp.local.x - snapLocalX) < 0.5 && Math.abs(comp.local.y - (-31)) < 0.5,
+        fovAfterDeg,
+      };
+    })()
+  `);
+  if (vds.error) fail('editor vehicle detection: ' + vds.error + ' ' + JSON.stringify(vds.labels));
+  if (vds.type !== 'vehicle_detection_sensor') fail('editor: did not place a vehicle_detection_sensor, got ' + vds.type);
+  if (!vds.localOk) fail('editor: detection sensor not placed on the snap point ' + JSON.stringify(vds));
+  if (vds.range !== 300) fail('editor: detection sensor default range should be 300, got ' + vds.range);
+  if (vds.fovDefaultDeg !== 180) fail('editor: detection sensor default FOV should be 180deg, got ' + vds.fovDefaultDeg);
+  if (!vds.hasAim || !vds.hasRange || !vds.hasFov) fail('editor: inspector must show Aim + Range + FOV for the detection sensor ' + JSON.stringify(vds));
+  if (vds.aimIsNum !== true) fail('editor: detection sensor should have a numeric aimAngle ' + JSON.stringify(vds));
+  if (vds.fovAfterDeg !== 90) fail('editor: editing FOV did not update props.fov, expected 90deg got ' + vds.fovAfterDeg);
+
+  ok('editor: placed at snap point, wired, duplicate detected, drag-snapped sR with wire following; 4x4 body-color picker works + editor canvas shows the color; vehicle-detection sensor placeable with Aim+Range+FOV');
 } catch (e) {
   fail(e.stack ?? String(e));
 }

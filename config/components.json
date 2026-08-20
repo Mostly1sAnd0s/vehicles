@@ -42,6 +42,16 @@
       "defaults": { "modelRef": "sensors.json#distance", "range": 150, "aimAngle": 0 }
     },
     {
+      "id": "vehicle_detection_sensor",
+      "name": "Vehicle Detection Sensor",
+      "category": "sensor",
+      "mass": 0.5,
+      "size": 8,
+      "shape": "circle",
+      "ports": [{ "id": "out", "kind": "sensor_output" }],
+      "defaults": { "modelRef": "sensors.json#vehicle_detection", "range": 300, "aimAngle": 0, "fov": 3.141592653589793 }
+    },
+    {
       "id": "generic_mount",
       "name": "Sensor Mount",
       "category": "mount",

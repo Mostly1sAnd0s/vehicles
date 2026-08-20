@@ -244,7 +244,43 @@ try {
   if (!paths.clearedAfterReset) fail('paths: Reset did not clear the trail');
   if (!/Paths: off/.test(paths.labelOff)) fail('paths: toggle did not turn off: ' + paths.labelOff);
 
-  ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}`);
+  // --- VEHICLE DETECTION SENSOR (end-to-end): add one (unwired) to the live
+  //     prototype, then verify through the real world.js -> evaluateVehicleSensors
+  //     path that it detects another vehicle dead-ahead in range, and NOT when
+  //     the other is behind its cone or out of range.
+  const detect = await evalJs(`
+    (() => {
+      const app = window.__app();
+      const sim = app.worldSim;
+      const protoV = app.state.world.vehiclePrototypes[0]._vehicle;
+      if (!protoV.components.some(c => c.type === 'vehicle_detection_sensor')) {
+        protoV.components.push({ id: 'vd', type: 'vehicle_detection_sensor', local: { x: 30, y: 0 }, aimAngle: 0, props: { range: 300, fov: Math.PI } });
+      }
+      const [A, B] = sim.instances;
+      if (!A || !B) return { error: 'need two instances' };
+      const park = inst => { inst.body.velocity = { x: 0, y: 0 }; inst.body.angularVelocity = 0; };
+      for (const inst of sim.instances.slice(2)) { inst.body.position.x = 99999; inst.body.position.y = 99999; park(inst); } // out of range
+      const place = (inst, x, y, a) => { inst.body.position.x = x; inst.body.position.y = y; inst.body.angle = a; park(inst); };
+      const vd = () => A.lastSamples.find(s => s.componentId === 'vd');
+
+      place(A, 0, 0, 0); place(B, 120, 0, 0); sim.step();
+      const front = { detected: vd().detected, value: vd().value, dist: vd().detectedDistance };
+      place(A, 0, 0, 0); place(B, -120, 0, 0); sim.step();
+      const behind = { detected: vd().detected, value: vd().value };
+      place(A, 0, 0, 0); place(B, 500, 0, 0); sim.step();
+      const far = { detected: vd().detected, value: vd().value };
+
+      protoV.components = protoV.components.filter(c => c.type !== 'vehicle_detection_sensor'); // tidy up
+      return { front, behind, far };
+    })()
+  `);
+  if (detect.error) fail('vehicle detection: ' + detect.error);
+  if (detect.front.detected !== true || detect.front.value !== 1) fail('vehicle detection: should detect a vehicle dead-ahead in range ' + JSON.stringify(detect.front));
+  if (!(Number.isFinite(detect.front.dist) && detect.front.dist > 0 && detect.front.dist < 120)) fail('vehicle detection: bad distance to target ' + JSON.stringify(detect.front));
+  if (detect.behind.detected !== false || detect.behind.value !== 0) fail('vehicle detection: must NOT detect a vehicle behind the cone ' + JSON.stringify(detect.behind));
+  if (detect.far.detected !== false || detect.far.value !== 0) fail('vehicle detection: must NOT detect a vehicle out of range ' + JSON.stringify(detect.far));
+
+  ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}; vehicle detection front/behind/far = ${detect.front.value}/${detect.behind.value}/${detect.far.value}`);
 } catch (e) {
   fail(e.stack ?? String(e));
 }

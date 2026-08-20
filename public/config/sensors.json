@@ -15,5 +15,11 @@
     "showBeam": true,
     "output": "normalized_inverse",
     "inversionRef": 1.0
+  },
+  "vehicle_detection": {
+    "model": "presence",
+    "defaultRange": 300,
+    "fov": 3.141592653589793,
+    "showCone": true
   }
 }

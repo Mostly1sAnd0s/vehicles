@@ -12,7 +12,8 @@ function angleDiff(a, b) {
 }
 // True when a source at world-angle angTo is inside the sensor's FOV cone
 // centered on aim with full aperture fov. No/undefined fov -> omnidirectional.
-function inFov(angTo, opts = {}) {
+// Exported so the vehicle-detection sensor can reuse the exact same cone test.
+export function inFov(angTo, opts = {}) {
   const fov = opts.fov;
   if (fov === undefined || !Number.isFinite(fov) || fov >= 2 * Math.PI - 1e-9) return true;
   return Math.abs(angleDiff(angTo, opts.aim ?? 0)) <= fov / 2 + 1e-9;
