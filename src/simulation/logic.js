@@ -9,7 +9,13 @@
  * Every function here is pure so the truth tables and graph evaluation are
  * unit-tested headlessly; the world sim calls `evaluateLogicGates` once per
  * instance per step to resolve gate outputs before actuation.
+ *
+ * Nodes are either boolean logic gates (0/1 truth tables) or Neurons — Vehicle-4
+ * nodes that apply a NON-monotonic transfer function (bell/triangle/custom) to a
+ * single analog input, producing a [0,1] output. Both live in `logicGates`.
  */
+
+import { isNeuron, transferOutput } from './transfer.js';
 
 // Canonical set of gates (no "XAND" — that is not a standard gate). NOT has a
 // single input; the rest are binary.
@@ -104,20 +110,25 @@ export function evaluateLogicGates(vehicle, valueOf) {
     if (cache.has(id)) return cache.get(id);
     if (visiting.has(id)) return 0; // cycle guard
     const gate = byGate.get(id);
-    const inputs = [];
-    if (gate) {
-      visiting.add(id);
+    if (!gate) return nodeValueOfSource(id); // a sensor/other source id
+    visiting.add(id);
+    let out;
+    if (isNeuron(gate.type)) {
+      // Analog: the Neuron reshapes its single input's value through its transfer
+      // function (bell/triangle/custom) — the Vehicle-4 non-monotonic law.
+      const src = inFeeders.get(`${id}:in0`);
+      out = transferOutput(gate.props, src === undefined ? 0 : nodeValueOfSource(src));
+    } else {
+      const inputs = [];
       for (let k = 0; k < gateInputCount(gate.type); k++) {
-        const src = inFeeders.get(`${id}:in${k}`);
-        inputs.push(src === undefined ? 0 : nodeValueOfSource(src));
+        const s = inFeeders.get(`${id}:in${k}`);
+        inputs.push(s === undefined ? 0 : nodeValueOfSource(s));
       }
-      visiting.delete(id);
-      const out = gateOutput(gate.type, inputs);
-      cache.set(id, out);
-      return out;
+      out = gateOutput(gate.type, inputs);
     }
-    // a sensor id: digitalise if the sensor asks for it
-    return nodeValueOfSource(id);
+    visiting.delete(id);
+    cache.set(id, out);
+    return out;
   };
 
   const nodeValueOfSource = src => {

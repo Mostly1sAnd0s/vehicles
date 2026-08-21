@@ -1,6 +1,6 @@
 {
   "name": "braitenberg-vehicles",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Braitenberg Vehicles simulator - client-side SPA",
   "type": "module",
   "scripts": {

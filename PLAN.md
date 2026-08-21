@@ -195,6 +195,96 @@ Sharing is via import/export of these JSON files. Manual drag-and-drop file hand
 
 This plan provides a modular, config-driven foundation for Vehicles 1-7 simulation with clear paths for extension.
 
+## 4. Vehicle 4 — Non-monotonic Sensor→Motor Response ("Neuron") + Multi-Output Ports
+
+Reference: `docs/v4.md`. Braitenberg's Vehicle 4 brand replaces the simple
+monotonic ("the more, the more / the less") sensor→motor law with a **non-
+monotonic** dependence: a motor runs faster as a sensor excites it *only up to
+a point* (a maximum at some intensity), then slows again. This lets a vehicle
+seek a source and then turn away once the stimulus is too strong, orbit a
+source like a satellite, or show "instinct"-like behaviours.
+
+### 4.1 The Neuron component (confirmed decisions)
+A new component named **Neuron** that sits *between* a sensor and a motor and
+applies a selectable non-linear transfer function `output = f(input)`:
+- **Name / id:** `neuron`, label "Neuron".
+- **Home:** reuses the logic-gate concept — it **floats** (free-placed rectangle,
+  not body-snapped) and is stored in `vehicle.logicGates[]` alongside gates.
+  `category: "logic"` so it appears in the same non-snapping processing palette
+  as the AND/OR/… gates. It is recognised as a *neuron* (not a boolean gate) via
+  `isNeuron(type)` so the evaluator routes it analogously, not through the truth
+  tables.
+- **Ports:** one input (`in0`, `logic_in`), one base output (`out`, `logic_out`)
+  — outputs become multi (see 4.2). Arity 1-in / N-out.
+- **Props:** `{ shape, threshold, sigma, gain, spline }`.
+- **Shape selector (center of the rectangle):** `bell`, `triangle`, `custom`
+  (bell is the literal "maximum at a level" 4a curve; triangle is its piecewise-
+  linear form; custom is a user-drawn response line).
+- **Threshold** = the input intensity at which the response peaks (the maximum
+  efficiency point from the text). For `bell` it is also the peak location
+  (Gaussian width `sigma`).
+- **Custom** = a spline of adjustable nodes (draggable control points on an
+  input→output plot; linear interpolation between nodes) so any irregular
+  response — multiple maxima, dead-zones, steep ramps — can be drawn.
+- **Output range:** clamped to **[0,1]** magnitude. Excitation/inhibition and
+  per-wire `weight` remain the downstream job of `computeActuation` (unchanged),
+  so a Neuron is a pure reshape of the signal, not a re-weighting.
+- **v1 scope:** single in / N out. The engine already supports neuron→neuron and
+  gate→neuron chaining (the evaluator recurses over `logicGates`); the UI keeps
+  it simple in v1.
+
+### 4.2 Multi-output ports (generalization to all output components)
+Today every output component exposes exactly one static `out` port, and the
+editor hardcodes `from.port = "out"` when wiring a source into an input — so a
+sensor can feed many motors (each motor's In picks it) but there is no way to
+add distinct, individually-managed **output taps** from the source side. We add
+**dynamic per-instance output ports**, adopted by *every* component that has
+outputs (sensors, logic gates, Neurons):
+- `componentOutputPorts(comp, def)` → `comp.outputs` if present, else the def's
+  output-kind ports. Backward compatible: existing docs/wires use `"out"`, which
+  remains the first/default port.
+- **"Add Output"** button in the inspector (shown for any component with ≥1
+  output-kind port) appends a new tap (`out1`, `out2`, …), materializing
+  `comp.outputs` by first copying the def's outputs; added taps can be removed
+  (keep ≥1).
+- Wires store the specific chosen tap in `from.port`. Source-selection dropdowns
+  (an actuator/gate/Neuron input) enumerate each candidate source's output taps
+  as distinct options (`componentId|port`).
+- **Value routing is unchanged:** a tap's value = its source component's value
+  (all outputs of a sensor share the raw reading; all outputs of a Neuron share
+  its transfer output). The runtime already keys sources by `componentId`, so no
+  world-sim change is needed.
+- **Validation** (`src/models/wiring.js`): accept a from-port if it ∈
+  `componentOutputPorts(source, def)`; input ports stay strictly from the def.
+
+### 4.3 Integration points (all small, all existing seams)
+- **Runtime:** `evaluateLogicGates` (`src/simulation/logic.js`) gets an analog
+  branch — a node whose type is a Neuron reads its single input and returns
+  `transferOutput(node.props, inputValue)` instead of a truth-table result. Its
+  output flows through the existing actuator path in `world.js` (already keyed
+  by componentId) → **no change to `world.js` value routing**.
+- **New pure module:** `src/simulation/transfer.js` — the transfer functions +
+  spline interpolation, unit-tested in isolation.
+
+### 4.4 Phases
+- **P1 (pure core):** `src/simulation/transfer.js` (`bell` / `triangle` /
+  `custom` spline, optional gain, clamped [0,1]) + unit tests. No UI, no deps.
+- **P2 (engine):** analog branch in `evaluateLogicGates`; `neuron` def in
+  `components.json` (category `logic`); wiring validation for dynamic outputs;
+  version bump; unit/integration tests (analog passthrough, chaining, cycles).
+- **P3 (placement + draw):** palette button in the processing palette; free
+  placement reusing the gate place/hit path; draw a rectangle with an input slot
+  (left), output slot(s) (right) and a mini live curve preview inside.
+- **P4 (inspector):** shape `<select>`, threshold slider, `custom` spline editor
+  (draggable nodes + add/remove), and the **"Add Output"** button (4.2).
+- **P5 (world + verification):** optional in-world rendering of neurons; PLAN
+  Status update; behavioral smoke — a light-sensor → Neuron(bell) → two-wheels
+  robot driven toward a light source, asserting **non-monotonic motor force**
+  (force rises then falls as stimulus crosses the threshold) — the observable
+  4a "seek then turn away / orbit" signature.
+- **P6 (optional):** per-tap gain on multi-outputs; monotone-cubic spline;
+  neuron→neuron chaining surfaced in the UI; extra presets.
+
 ## Status (updated — body color + vehicle-detection-sensor sessions; includes prior sensor/motor tuning)
 
 ### Implemented

@@ -52,6 +52,16 @@
       "defaults": { "modelRef": "sensors.json#vehicle_detection", "range": 300, "aimAngle": 0, "fov": 3.141592653589793 }
     },
     {
+      "id": "neuron",
+      "name": "Neuron",
+      "category": "logic",
+      "mass": 0,
+      "size": 30,
+      "shape": "rect",
+      "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
+      "defaults": { "shape": "bell", "threshold": 0.5, "sigma": 0.35, "spline": [{ "x": 0, "y": 0 }, { "x": 1, "y": 1 }] }
+    },
+    {
       "id": "gate_and",
       "name": "AND",
       "category": "logic",
