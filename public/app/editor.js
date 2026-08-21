@@ -28,7 +28,10 @@ export class VehicleEditor {
   snapPoints() {
     const v = this.state.vehicle;
     const n = this.state.configs.app.defaults.snapPointCount;
-    return generateSnapPoints(v.body, n);
+    // Perimeter snaps plus a body-CENTRE attachment point (index n). Dropping or
+    // clicking near the middle of the robot places there — handy for mounting a
+    // Propagator at the core so it radiates evenly in every direction.
+    return [...generateSnapPoints(v.body, n), { x: 0, y: 0, normalX: 1, normalY: 0, center: true }];
   }
 
   bindUI() {
@@ -196,8 +199,8 @@ export class VehicleEditor {
     const n = Math.hypot(snap.normalX, snap.normalY) || 1;
     const off = (def?.size ?? 8) + 3;
     c.snapIndex = idx;
-    c.local = { x: snap.x + (snap.normalX / n) * off, y: snap.y + (snap.normalY / n) * off };
-    if (def?.category === 'sensor') c.aimAngle = Math.atan2(snap.normalY, snap.normalX);
+    c.local = snap.center ? { x: 0, y: 0 } : { x: snap.x + (snap.normalX / n) * off, y: snap.y + (snap.normalY / n) * off };
+    if (def?.category === 'sensor') c.aimAngle = snap.center ? 0 : Math.atan2(snap.normalY, snap.normalX);
     else c.localRotation = 0; // wheels roll along body forward
   }
 
@@ -236,12 +239,12 @@ export class VehicleEditor {
       id: `${type.replace(/_.*$/, '')}_${this.nextNum++}`,
       type,
       snapIndex,
-      local: { x: snap.x + (snap.normalX / n) * off, y: snap.y + (snap.normalY / n) * off },
+      local: snap.center ? { x: 0, y: 0 } : { x: snap.x + (snap.normalX / n) * off, y: snap.y + (snap.normalY / n) * off },
       localRotation: 0,
       props: isSensor ? JSON.parse(JSON.stringify(def.defaults)) : {},
     };
     if (isSensor) {
-      c.aimAngle = Math.atan2(snap.normalY, snap.normalX);
+      c.aimAngle = snap.center ? 0 : Math.atan2(snap.normalY, snap.normalX);
       c.props.range = def.defaults.range;
     } else if (def.category === 'special') {
       // special parts (e.g. the Propagator) carry their tuning in props from the start
@@ -670,6 +673,22 @@ export class VehicleEditor {
           ctx.lineWidth = 1;
           ctx.stroke();
         }
+      }
+
+      // Propagator: a dashed ring of radius = its threshold centred on the part
+      // itself — you can SEE the conversion boundary while tuning it (this is
+      // the same circle the world draws during a run).
+      if (c.type === 'propagate') {
+        const R = Math.max(0, c.props?.threshold ?? 260);
+        ctx.beginPath();
+        ctx.arc(c.local.x, c.local.y, R, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(141,255,190,0.05)';
+        ctx.fill();
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = 'rgba(141,255,190,0.55)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
 

@@ -182,7 +182,8 @@ export class WorldSim {
     let anyConverted = 0;
     for (const inst of hosts) {
       const v = this.vehicleFor(inst);
-      const p = v.components.find(c => c.type === 'propagate').props ?? {};
+      const prop = v.components.find(c => c.type === 'propagate');
+      const p = prop.props ?? {};
       const threshold = p.threshold ?? 260;
       const cooldownTicks = p.cooldownTicks ?? 0;
       const maxConverted = (p.maxConverted == null || Number.isNaN(Number(p.maxConverted))) ? null : Math.max(0, Number(p.maxConverted));
@@ -192,8 +193,15 @@ export class WorldSim {
       const eligible = inst.convertedAt == null || (this.stepCount - inst.convertedAt >= cooldownTicks);
       if (!eligible) continue;
       const hostSig = cand.find(c => c.id === inst.id)?.signature;
+      // The trigger radiates from the Propagator's OWN position (not the body
+      // centre): a robot that bumps the side of the host carrying it is close
+      // enough to convert, while one on the far side stays out of range.
+      const a = inst.body.angle;
+      const lx = prop.local?.x ?? 0, ly = prop.local?.y ?? 0;
+      const hx = inst.body.position.x + Math.cos(a) * lx - Math.sin(a) * ly;
+      const hy = inst.body.position.y + Math.sin(a) * lx + Math.cos(a) * ly;
       const targets = selectPropagationTargets(
-        { id: inst.id, x: inst.body.position.x, y: inst.body.position.y, signature: hostSig },
+        { id: inst.id, x: hx, y: hy, signature: hostSig },
         cand, { threshold, maxConverted, alreadyConverted: this.convertedCount });
       for (const t of targets) {
         const target = live.find(i => i.id === t.id);
@@ -262,6 +270,7 @@ export class WorldSim {
 
     for (const inst of this.instances) {
       const v = this.vehicleFor(inst);
+      if (!v) continue; // proto removed mid-run: skip rather than crash the loop
       const pose = { x: inst.body.position.x, y: inst.body.position.y, angle: inst.body.angle };
       const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.state.configs.sensors);
       inst.lastSamples = samples;

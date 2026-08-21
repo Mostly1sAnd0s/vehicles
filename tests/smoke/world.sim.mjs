@@ -344,7 +344,9 @@ try {
       const convAfterReset = sim.convertedCount;
       const plainClearedAfterReset = sim.instances.filter(i => i.protoId === plain.id).every(i => !i.vehicleOverride);
 
-      // tidy up so nothing downstream is affected
+      // tidy up so nothing downstream is affected (drop running instances BEFORE
+      // removing the proto, or they dangle and vehicleFor() returns null)
+      sim.dropInstancesOf(plain.id);
       protos.splice(protos.indexOf(plain), 1);
       srcV.components = srcV.components.filter(c => c.type !== 'propagate');
 
@@ -360,7 +362,51 @@ try {
   if (!prop.stable) fail('propagation: count kept climbing after convergence (no idempotent stop)');
   if (prop.convAfterReset !== 0 || !prop.plainClearedAfterReset) fail(`propagation: reset did not restore the initial mix (conv=${prop.convAfterReset})`);
 
-  ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}; vehicle detection front/behind/far = ${detect.front.value}/${detect.behind.value}/${detect.far.value}; propagation ${prop.convertedPlain}/${prop.total} converted, converged + reset`);
+  // --- DIRECTIONALITY: the trigger radiates from the Propagator's OWN position,
+  //     not the body centre. The host faces +x at the origin with its Propagator on
+  //     the front (local +x). A target AHEAD is inside the trigger and converts; a
+  //     target BEHIND the body is outside it and stays unconverted — even though it
+  //     would be in range if measured from the body centre. This is exactly what
+  //     distinguishes "radiates from the part" from "radiates from the body".
+  const dir = await evalJs(`(() => {
+    try {
+      const app = window.__app();
+      const sim = app.worldSim;
+      const protos = sim.worldDoc.vehiclePrototypes;
+      const src = protos[0];
+      const srcV = src._vehicle ?? src.vehicle;
+      if (!srcV.components.some(c => c.type === 'propagate')) {
+        srcV.components.push({ id: 'prop', type: 'propagate', local: { x: 30, y: 0 }, snapIndex: 0, props: { threshold: 80, cooldownTicks: 0 } });
+      }
+      const prop = srcV.components.find(c => c.type === 'propagate');
+      prop.local = { x: 30, y: 0 }; prop.props.threshold = 80; prop.props.cooldownTicks = 0;
+      const dv = JSON.parse(JSON.stringify(srcV));
+      dv.components = dv.components.filter(c => c.type !== 'propagate');
+      const tgt = { id: 'dir_' + Date.now(), name: 'Dir target (test)', _vehicle: dv, instances: [
+        { id: 'front', position: { x: 90, y: 0 }, rotation: 0 },   // ahead of the Propagator -> converts
+        { id: 'back',  position: { x: -80, y: 0 }, rotation: 0 },   // behind the body -> stays out of range
+      ] };
+      protos.push(tgt);
+      for (const i of sim.instances) if (i.protoId !== src.id && i.protoId !== tgt.id) { i.body.position.x = 9e5; i.body.position.y = 9e5; i.body.velocity = { x: 0, y: 0 }; }
+      src.instances = [{ id: 'seedD', position: { x: 0, y: 0 }, rotation: 0 }];
+      sim.ensureCount(src, 1);
+      sim.ensureCount(tgt, 2);
+      sim.reset();
+      for (let i = 0; i < 3; i++) sim.step();
+      const front = sim.instances.find(i => i.protoId === tgt.id && i.id === 'front');
+      const back  = sim.instances.find(i => i.protoId === tgt.id && i.id === 'back');
+      const out = { frontConverted: !!front?.vehicleOverride, backConverted: !!back?.vehicleOverride };
+      sim.dropInstancesOf(tgt.id);
+      protos.splice(protos.indexOf(tgt), 1);
+      srcV.components = srcV.components.filter(c => c.type !== 'propagate');
+      return out;
+    } catch (e) { return { error: e.stack }; }
+  })()`);
+  if (dir.error) fail('directionality: ' + dir.error);
+  if (!dir.frontConverted) fail('directionality: the target AHEAD of the Propagator was not converted');
+  if (dir.backConverted) fail('directionality: the target BEHIND the body was converted (trigger radiates from the body, not the Propagator)');
+
+  ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}; vehicle detection front/behind/far = ${detect.front.value}/${detect.behind.value}/${detect.far.value}; propagation ${prop.convertedPlain}/${prop.total} converted + directional front/behind = ${dir.frontConverted}/${dir.backConverted}, converged + reset`);
 } catch (e) {
   fail(e.stack ?? String(e));
 }

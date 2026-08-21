@@ -258,7 +258,7 @@ export function drawWorld(sim) {
         }
 
         // Distance sensor: thin full-range ray.
-        length = sim.prototypeVehicle(sim.instances.find(i => i.id === s.instanceId)?.protoId)
+        length = sim.vehicleFor(sim.instances.find(i => i.id === s.instanceId))
           ?.components.find(c => c.id === s.componentId)?.props?.range ?? 150;
         level = 1;
         if (length <= 0) continue;
@@ -270,6 +270,30 @@ export function drawWorld(sim) {
         ctx.strokeStyle = `rgba(140,200,255,${0.35.toFixed(3)})`;
         ctx.lineWidth = 1;
         ctx.stroke();
+      }
+
+      // Propagator trigger range: a full circle centred on the Propagator's own
+      // position, radius = its threshold. This IS the conversion boundary, so it
+      // shows exactly which side of the host can convert (and how far) — adjust
+      // the threshold and watch the ring grow/shrink to match.
+      for (const inst of sim.instances) {
+        const v = sim.vehicleFor(inst);
+        if (!v || !inst.body) continue;
+        const prop = (v.components ?? []).find(c => c.type === 'propagate');
+        if (!prop?.local) continue;
+        const a = inst.body.angle;
+        const cx = inst.body.position.x + Math.cos(a) * prop.local.x - Math.sin(a) * prop.local.y;
+        const cy = inst.body.position.y + Math.sin(a) * prop.local.x + Math.cos(a) * prop.local.y;
+        const R = Math.max(0, prop.props?.threshold ?? 260);
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(141,255,190,0.05)';
+        ctx.fill();
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = 'rgba(141,255,190,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
   }
