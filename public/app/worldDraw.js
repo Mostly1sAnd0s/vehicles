@@ -62,7 +62,7 @@ export function drawWorld(sim) {
 
     // instances
     for (const inst of sim.instances) {
-      const v = sim.prototypeVehicle(inst.protoId);
+      const v = sim.vehicleFor(inst);
       if (!v || !inst.body) continue;
       const b = inst.body;
       ctx.save();
@@ -94,13 +94,20 @@ export function drawWorld(sim) {
         ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
         ctx.fill();
       }
+      // conversion flash: a freshly-converted robot rings green, fading over 700ms.
+      if (inst.flashUntil && typeof performance !== 'undefined' && inst.flashUntil > performance.now()) {
+        const t = Math.max(0, (inst.flashUntil - performance.now()) / 700);
+        ctx.strokeStyle = `rgba(141,255,190,${(0.35 + 0.6 * t).toFixed(3)})`;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(-v.body.width / 2 - 6, -v.body.height / 2 - 6, v.body.width + 12, v.body.height + 12);
+      }
       ctx.restore();
     }
 
     // motion trails (drawn over the bodies), gated by the Paths toggle
     if (sim.paths) {
       for (const inst of sim.instances) {
-        const v = sim.prototypeVehicle(inst.protoId);
+        const v = sim.vehicleFor(inst);
         if (!v || !Array.isArray(inst.path) || inst.path.length < 2) continue;
         ctx.beginPath();
         inst.path.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
@@ -117,7 +124,7 @@ export function drawWorld(sim) {
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       for (const inst of sim.instances) {
-        const v = sim.prototypeVehicle(inst.protoId);
+        const v = sim.vehicleFor(inst);
         if (!v || !inst.body) continue;
         const a = inst.body.angle;
         const toWorld = l => ({ x: inst.body.position.x + Math.cos(a) * l.x - Math.sin(a) * l.y,

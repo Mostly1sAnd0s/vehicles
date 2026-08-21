@@ -120,6 +120,16 @@
       "shape": "rect",
       "ports": [{ "id": "in0", "kind": "logic_in" }, { "id": "out", "kind": "logic_out" }],
       "defaults": {}
+    },
+    {
+      "id": "propagate",
+      "name": "Propagator",
+      "category": "special",
+      "mass": 0.5,
+      "size": 12,
+      "shape": "circle",
+      "ports": [],
+      "defaults": { "threshold": 260, "cooldownTicks": 0, "maxConverted": null }
     }
   ]
 }

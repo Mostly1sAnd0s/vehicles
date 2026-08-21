@@ -243,6 +243,11 @@ export class VehicleEditor {
     if (isSensor) {
       c.aimAngle = Math.atan2(snap.normalY, snap.normalX);
       c.props.range = def.defaults.range;
+    } else if (def.category === 'special') {
+      // special parts (e.g. the Propagator) carry their tuning in props from the start
+      for (const k of ['threshold', 'cooldownTicks', 'maxConverted']) {
+        if (def.defaults?.[k] != null) c.props[k] = def.defaults[k];
+      }
     }
     this.state.vehicle.components.push(c);
     this.selectedComp = c.id;
@@ -440,6 +445,15 @@ export class VehicleEditor {
       html += `<label>Wheel friction <input type="range" id="ins-fr" min="0" max="1" step="0.05" value="${fr}"> <span id="ins-fr-v">${(+fr).toFixed(2)}</span></label>`;
       html += `<div class="hint">more power = faster; more friction = grip &amp; less coasting (0 = ice)</div>`;
     }
+    if (c.type === 'propagate') {
+      const th = c.props?.threshold ?? 260;
+      const cool = c.props?.cooldownTicks ?? 0;
+      const mc = c.props?.maxConverted ?? '';
+      html += `<label>Trigger distance <input type="number" id="ins-prop-th" min="1" step="5" value="${th}"></label>`;
+      html += `<label>Cooldown (ticks) <input type="number" id="ins-prop-cool" min="0" step="1" value="${cool}"></label>`;
+      html += `<label>Max converted <input type="number" id="ins-prop-max" min="0" step="1" value="${mc}" placeholder="all"></label>`;
+      html += `<div class="hint">copies this whole vehicle onto any nearby robot within trigger distance &mdash; the target becomes a clone and spreads onward</div>`;
+    }
     const cat = this.compDef(c.type)?.category;
     if (cat === 'sensor' || cat === 'actuator') {
       const opts = cat === 'sensor'
@@ -461,6 +475,9 @@ export class VehicleEditor {
     box.querySelector('#ins-fov')?.addEventListener('change', e => { c.props.fov = (Math.min(360, Math.max(0, Number(e.target.value) || 0))) * Math.PI / 180; this.refresh(); });
     box.querySelector('#ins-thresh')?.addEventListener('change', e => { c.props.threshold = Math.max(0.001, Number(e.target.value) || 0.001); this.refresh(); });
     box.querySelector('#ins-pol')?.addEventListener('change', e => { c.polarity = e.target.value; this.refresh(); });
+    box.querySelector('#ins-prop-th')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.threshold = Math.max(1, Number(e.target.value) || 260); this.refresh(); });
+    box.querySelector('#ins-prop-cool')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.cooldownTicks = Math.max(0, Math.round(Number(e.target.value) || 0)); this.refresh(); });
+    box.querySelector('#ins-prop-max')?.addEventListener('change', e => { c.props = c.props ?? {}; const n = Number(e.target.value); c.props.maxConverted = (e.target.value === '' || Number.isNaN(n)) ? null : Math.max(0, Math.round(n)); this.refresh(); });
 
     // connection slots: selecting a source/destination creates (or replaces) the
     // single wire on that endpoint. Works for every ported part (sensor/motor/gate).

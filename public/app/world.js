@@ -6,7 +6,7 @@
 import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
-import { evaluateLogicGates } from '../src/simulation/logic.js';
+import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
 import { findInstanceAt } from '../src/models/hitTest.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
@@ -30,6 +30,8 @@ export class WorldSim {
     this.playing = false;
     this.beams = true;
     this.selectedElement = null;
+    this.stepCount = 0;        // monotonic sim-step counter (drives cooldownTicks)
+    this.convertedCount = 0;   // total instances converted this run (reset on reset())
     this.instances = [];          // {id, protoId, body, seed:{x,y,rotation}}
     this.obstacleBodies = [];
     this.lastSamples = [];        // for beam drawing (per instance)
@@ -68,7 +70,7 @@ export class WorldSim {
 
   makeInstanceBody(inst) {
     const M = this.M;
-    const v = this.prototypeVehicle(inst.protoId);
+    const v = this.vehicleFor(inst);
     if (!v) return null;
     const parts = [M.Bodies.rectangle(0, 0, v.body.width, v.body.height, { density: 0.001 })];
     for (const c of v.components) {
@@ -85,7 +87,7 @@ export class WorldSim {
     // physics bodies only rebuild when component geometry actually changed,
     // preserving pose AND velocity so edits never stop a moving car.
     for (const inst of this.instances) {
-      const v = this.prototypeVehicle(inst.protoId);
+      const v = this.vehicleFor(inst);
       if (!v) continue;
       const wireSig = JSON.stringify(v.wires ?? []);
       if (wireSig !== inst.wireSig) {
@@ -126,9 +128,18 @@ export class WorldSim {
     return proto ? (proto.vehicle ?? proto._vehicle) : null;
   }
 
+  // Effective vehicle doc for a running instance. Normally the shared prototype
+  // doc; but once configuration propagation converts an instance it carries its
+  // own deep-cloned doc in `inst.vehicleOverride` (pose/momentum untouched). All
+  // per-instance reads route through here so a converted robot behaves as its new
+  // config, while unconverted robots behave exactly as before.
+  vehicleFor(inst) {
+    return inst?.vehicleOverride ?? this.prototypeVehicle(inst?.protoId);
+  }
+
   // wire map per instance: wheelId -> [{wire, sensorId}]
   instWireMap(inst) {
-    const v = this.prototypeVehicle(inst.protoId);
+    const v = this.vehicleFor(inst);
     const map = {};
     for (const w of v.wires ?? []) {
       (map[w.to.componentId] ??= []).push({ wire: w, sensorId: w.from.componentId });
@@ -140,7 +151,7 @@ export class WorldSim {
   // per-wheel grip -> top-down drag on each composite body; reads the
   // current wheel friction props every tick so inspector tuning applies at once.
   applyWheelFriction(inst) {
-    const v = this.prototypeVehicle(inst.protoId);
+    const v = this.vehicleFor(inst);
     const cfg = this.state.configs.actuators?.powered_wheel ?? {};
     const wheels = (v?.components ?? []).filter(c => this.componentDef(c.type)?.category === 'actuator' && c.local);
     let f = cfg.defaultFriction ?? 0.5;
@@ -148,6 +159,77 @@ export class WorldSim {
       f = wheels.reduce((sum, c) => sum + (c.props?.friction ?? cfg.defaultFriction ?? 0.5), 0) / wheels.length;
     }
     inst.body.frictionAir = wheelFrictionAir(f, cfg);
+  }
+
+  // ---------------- configuration propagation ("replicate") ----------------
+  // A host carrying a `propagate` component copies its whole vehicle doc onto
+  // any nearby robot whose config differs (nearest first, within the shared cap),
+  // producing a true clone that carries the component onward. Idempotent: a pair
+  // whose configs already match never re-fires, so a single seed converges to
+  // all-converted and stops. Converted instances get a brief flash; a status pill
+  // reports converted/total. reset() clears all of it back to the initial mix.
+  stepPropagation() {
+    this.stepCount++;
+    const live = this.instances.filter(i => i.body);
+    if (live.length < 2) { this.updatePropagationStatus(); return; }
+    // Pre-conversion snapshot of every live instance (positions + config sig).
+    const cand = live.map(i => ({ id: i.id, x: i.body.position.x, y: i.body.position.y, signature: vehicleSignature(this.vehicleFor(i)) }));
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    // Hosts are captured from PRE-conversion state: an instance that only acquires
+    // the Propagator this step spreads on a LATER step, so a fresh clone can't
+    // turn around and re-convert its own source within the same pass.
+    const hosts = live.filter(i => (this.vehicleFor(i)?.components ?? []).some(c => c.type === 'propagate'));
+    let anyConverted = 0;
+    for (const inst of hosts) {
+      const v = this.vehicleFor(inst);
+      const p = v.components.find(c => c.type === 'propagate').props ?? {};
+      const threshold = p.threshold ?? 260;
+      const cooldownTicks = p.cooldownTicks ?? 0;
+      const maxConverted = (p.maxConverted == null || Number.isNaN(Number(p.maxConverted))) ? null : Math.max(0, Number(p.maxConverted));
+      // Cooldown: a freshly-converted instance waits `cooldownTicks` steps before it
+      // may itself propagate (bounds spread speed; 0 = immediate). A seed that
+      // carried the component from the start is always eligible.
+      const eligible = inst.convertedAt == null || (this.stepCount - inst.convertedAt >= cooldownTicks);
+      if (!eligible) continue;
+      const hostSig = cand.find(c => c.id === inst.id)?.signature;
+      const targets = selectPropagationTargets(
+        { id: inst.id, x: inst.body.position.x, y: inst.body.position.y, signature: hostSig },
+        cand, { threshold, maxConverted, alreadyConverted: this.convertedCount });
+      for (const t of targets) {
+        const target = live.find(i => i.id === t.id);
+        if (!target || target.vehicleOverride) continue; // guard same-step multi-source races
+        const nonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        target.vehicleOverride = cloneVehicleForConversion(v, nonce);
+        target.converted = true;
+        target.convertedAt = this.stepCount;
+        target.flashUntil = now() + 700;
+        this.convertedCount++;
+        anyConverted++;
+      }
+    }
+    if (anyConverted) this.syncInstances(); // rebuild converted bodies + wire maps in place, pose preserved
+    this.updatePropagationStatus();
+  }
+
+  updatePropagationStatus() {
+    const hostProp = inst => (this.vehicleFor(inst)?.components ?? []).find(c => c.type === 'propagate');
+    const hasHost = this.instances.some(hostProp);
+    let el = document.getElementById('propagation-status');
+    if (!hasHost) { if (el) el.style.display = 'none'; return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'propagation-status';
+      el.style.cssText = 'position:absolute;top:10px;left:10px;z-index:5;padding:3px 8px;font:11px/1.4 monospace;background:rgba(20,28,44,.9);color:#8dffbe;border:1px solid #35547a;border-radius:6px;pointer-events:none;';
+      const parent = this.canvas?.parentElement;
+      if (parent) parent.appendChild(el);
+    }
+    let cap = null;
+    for (const i of this.instances) {
+      const pp = hostProp(i);
+      if (pp && pp.props?.maxConverted != null && !Number.isNaN(Number(pp.props.maxConverted))) { cap = Math.max(0, Number(pp.props.maxConverted)); break; }
+    }
+    el.style.display = 'block';
+    el.textContent = `Propagation ${this.convertedCount}/${cap ?? this.instances.length} converted`;
   }
 
   step() {
@@ -163,6 +245,11 @@ export class WorldSim {
       if (inst.path.length > PATH_CAP) inst.path.shift();
     }
 
+    // Configuration propagation: any `propagate` component copies its host's
+    // vehicle doc onto nearby robots whose config differs (before actuation, so
+    // a freshly-converted robot drives with its new config this same step).
+    this.stepPropagation();
+
     const snapshot = worldElementsToSnapshot(this.worldDoc.elements);
     // Fleet poses for vehicle-detection sensors: every instance's current world
     // pose. Each sensor excludes itself by instanceId (see sampleSensors).
@@ -174,7 +261,7 @@ export class WorldSim {
     const allSamples = [];
 
     for (const inst of this.instances) {
-      const v = this.prototypeVehicle(inst.protoId);
+      const v = this.vehicleFor(inst);
       const pose = { x: inst.body.position.x, y: inst.body.position.y, angle: inst.body.angle };
       const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.state.configs.sensors);
       inst.lastSamples = samples;
@@ -363,13 +450,23 @@ export class WorldSim {
   }
 
   reset() {
+    let hadPropagation = false;
     for (const inst of this.instances) {
       M_BodySetPosition(this.M, inst.body, { x: inst.seed.x, y: inst.seed.y });
       M_BodySetAngle(this.M, inst.body, inst.seed.rotation);
       inst.body.velocity = { x: 0, y: 0 };
       inst.body.angularVelocity = 0;
       inst.path = []; // fresh trail after a reset
+      // Restore the initial mix: drop any propagated clone + bookkeeping.
+      if (inst.vehicleOverride || inst.converted) hadPropagation = true;
+      inst.vehicleOverride = null;
+      inst.converted = false;
+      inst.convertedAt = null;
+      inst.flashUntil = 0;
     }
+    this.convertedCount = 0;
+    if (hadPropagation) this.syncInstances(); // convert clone bodies back to the prototype doc
+    this.updatePropagationStatus();
     this.acc = 0;
   }
 

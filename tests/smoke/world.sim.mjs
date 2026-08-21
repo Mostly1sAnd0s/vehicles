@@ -280,7 +280,87 @@ try {
   if (detect.behind.detected !== false || detect.behind.value !== 0) fail('vehicle detection: must NOT detect a vehicle behind the cone ' + JSON.stringify(detect.behind));
   if (detect.far.detected !== false || detect.far.value !== 0) fail('vehicle detection: must NOT detect a vehicle out of range ' + JSON.stringify(detect.far));
 
-  ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}; vehicle detection front/behind/far = ${detect.front.value}/${detect.behind.value}/${detect.far.value}`);
+  // --- CONFIGURATION PROPAGATION ("replicate") end-to-end: seed ONE vehicle
+  //     carrying a Propagator among plain vehicles; through the real world.js step
+  //     loop, assert it copies its whole config onto every in-range neighbour (a
+  //     true clone that also carries the Propagator), converges (idempotent stop),
+  //     never converts the source from itself, and reset() restores the mix.
+  const prop = await evalJs(`
+    (() => {
+      const app = window.__app();
+      const sim = app.worldSim;
+      document.getElementById('tab-world').click();
+      const protos = sim.worldDoc.vehiclePrototypes;
+      const src = protos[0];
+      const srcV = src._vehicle ?? src.vehicle;
+      if (!srcV.components.some(c => c.type === 'propagate')) {
+        srcV.components.push({ id: 'prop', type: 'propagate', local: { x: 0, y: 0 }, snapIndex: 0, props: { threshold: 400, cooldownTicks: 0 } });
+      }
+      // a plain proto = a clone of the source WITHOUT the Propagator (a distinct config)
+      let plain = protos.find(p => p !== src && !((p._vehicle ?? p.vehicle).components.some(c => c.type === 'propagate')));
+      if (!plain) {
+        plain = { id: 'plain_' + Date.now(), name: 'Plain (test)', instances: [] };
+        const pv = JSON.parse(JSON.stringify(srcV));
+        pv.components = pv.components.filter(c => c.type !== 'propagate');
+        plain._vehicle = pv;
+        protos.push(plain);
+      }
+      // park any unrelated instances far away so they cannot interfere
+      for (const i of sim.instances) {
+        if (i.protoId !== src.id && i.protoId !== plain.id) { i.body.position.x = 9e5; i.body.position.y = 9e5; i.body.velocity = { x: 0, y: 0 }; }
+      }
+      // seed at the origin (1); three plain vehicles within threshold
+      src.instances = [{ id: 'seedA', position: { x: 0, y: 0 }, rotation: 0 }];
+      plain.instances = [
+        { id: 'pl1', position: { x: 120, y: 0 }, rotation: 0 },
+        { id: 'pl2', position: { x: 150, y: 60 }, rotation: 0 },
+        { id: 'pl3', position: { x: 140, y: -50 }, rotation: 0 },
+      ];
+      sim.ensureCount(src, 1);
+      sim.ensureCount(plain, 3);
+      sim.reset();
+
+      const counts = [];
+      const t0 = Date.now(); let guard = 0;
+      while (Date.now() - t0 < 8000 && guard++ < 4000) {
+        sim.step();
+        counts.push(sim.convertedCount);
+        if (sim.instances.filter(i => i.protoId === plain.id).every(i => i.vehicleOverride)) break;
+      }
+
+      const conv = sim.convertedCount;
+      const plainInsts = sim.instances.filter(i => i.protoId === plain.id);
+      const convertedPlain = plainInsts.filter(i => i.vehicleOverride).length;
+      const carriesProp = i => (i.vehicleOverride?.components ?? []).some(c => c.type === 'propagate');
+      const allConvertedCarryProp = plainInsts.filter(i => i.vehicleOverride).every(carriesProp);
+      const seedNotConverted = !sim.instances.find(i => i.protoId === src.id)?.vehicleOverride;
+      const mono = counts.every((c, i2) => i2 === 0 || c >= counts[i2 - 1]);
+      // idempotency: keep stepping — the count must stop climbing once all match
+      const after = sim.convertedCount;
+      for (let i = 0; i < 20; i++) sim.step();
+      const stable = sim.convertedCount === after;
+      // reset restores the initial mix
+      sim.reset();
+      const convAfterReset = sim.convertedCount;
+      const plainClearedAfterReset = sim.instances.filter(i => i.protoId === plain.id).every(i => !i.vehicleOverride);
+
+      // tidy up so nothing downstream is affected
+      protos.splice(protos.indexOf(plain), 1);
+      srcV.components = srcV.components.filter(c => c.type !== 'propagate');
+
+      return { conv, convertedPlain, total: plain.instances.length, allConvertedCarryProp, seedNotConverted, mono, stable, convAfterReset, plainClearedAfterReset };
+    })()
+  `);
+  if (prop.error) fail('propagation: ' + prop.error);
+  if (prop.convertedPlain !== prop.total) fail(`propagation: not every plain vehicle converted (${prop.convertedPlain}/${prop.total})`);
+  if (prop.conv !== prop.total) fail(`propagation: convertedCount ${prop.conv} != plain total ${prop.total}`);
+  if (!prop.allConvertedCarryProp) fail('propagation: a converted clone is missing the propagate component (not a true clone)');
+  if (!prop.seedNotConverted) fail('propagation: the source seed was converted from itself');
+  if (!prop.mono) fail('propagation: converted count did not rise monotonically');
+  if (!prop.stable) fail('propagation: count kept climbing after convergence (no idempotent stop)');
+  if (prop.convAfterReset !== 0 || !prop.plainClearedAfterReset) fail(`propagation: reset did not restore the initial mix (conv=${prop.convAfterReset})`);
+
+  ok(`simulation + sensor/motor polarity: ${result.count} instances, dΔ ${result.deltaA} -> ${result.deltaB}, sL raw=${result.rawS.toFixed(3)} inv=${result.invS.toFixed(3)}, thrust F=${result.pF.toExponential(2)} R=${result.pR.toExponential(2)}; vehicle detection front/behind/far = ${detect.front.value}/${detect.behind.value}/${detect.far.value}; propagation ${prop.convertedPlain}/${prop.total} converted, converged + reset`);
 } catch (e) {
   fail(e.stack ?? String(e));
 }
