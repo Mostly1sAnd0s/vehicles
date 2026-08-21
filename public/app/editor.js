@@ -290,6 +290,25 @@ export class VehicleEditor {
     return port ? this.gateAnchor(g, port) : { x: g.pos.x, y: g.pos.y };
   }
 
+  // Tiny response-curve glyph for a Neuron: samples its transfer function across
+  // input 0..1 and plots it inside the box (output 1 at top). The interactive
+  // editor for the curve itself lives in the inspector.
+  drawNeuronCurve(ctx, g, w, h) {
+    const x0 = -w / 2 + 2, x1 = w / 2 - 2;
+    const yTop = -h / 2 + 2, yBot = h / 2 - 6;
+    ctx.beginPath();
+    for (let i = 0; i <= 16; i++) {
+      const t = i / 16;
+      const o = transferOutput(g.props, t);
+      const x = x0 + (x1 - x0) * t;
+      const y = yBot - (yBot - yTop) * o;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = '#0d2b1a';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
   hitGate(p) {
     for (let i = (this.state.vehicle.logicGates ?? []).length - 1; i >= 0; i--) {
       const g = this.state.vehicle.logicGates[i];
@@ -302,6 +321,9 @@ export class VehicleEditor {
     const v = this.state.vehicle;
     v.logicGates = v.logicGates ?? [];
     const c = { id: `gate_${this.nextNum++}`, type, pos };
+    // A Neuron carries its transfer config (shape/threshold/sigma/spline) here;
+    // boolean gates default to none. Clone so each node owns an independent copy.
+    c.props = JSON.parse(JSON.stringify(this.compDef(type)?.defaults ?? {}));
     v.logicGates.push(c);
     this.selectedComp = c.id;
     this.selectedWire = null;
@@ -613,13 +635,17 @@ export class VehicleEditor {
         ctx.beginPath(); ctx.moveTo(-w / 2 - 5, y); ctx.lineTo(-w / 2, y); ctx.stroke();
       });
       ctx.beginPath(); ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2 + 5, 0); ctx.stroke();
-      ctx.fillStyle = 'rgba(255, 176, 32, 0.9)';
-      ctx.strokeStyle = sel ? '#ffffff' : 'rgba(122, 91, 18, 0.6)';
+      const neuron = isNeuron(g.type);
+      // Neurons are tinted teal (analog) vs the amber of boolean gates; a live
+      // curve glyph inside shows the chosen response shape at a glance.
+      ctx.fillStyle = neuron ? 'rgba(70, 209, 122, 0.9)' : 'rgba(255, 176, 32, 0.9)';
+      ctx.strokeStyle = sel ? '#ffffff' : (neuron ? 'rgba(38, 122, 74, 0.7)' : 'rgba(122, 91, 18, 0.6)');
       ctx.lineWidth = sel ? 2 : 1;
       ctx.fillRect(-w / 2, -h / 2, w, h);
       ctx.strokeRect(-w / 2, -h / 2, w, h);
+      if (neuron) this.drawNeuronCurve(ctx, g, w, h);
       ctx.fillStyle = '#1a1a1a';
-      ctx.fillText(label, 0, 0);
+      ctx.fillText(label, 0, neuron ? h / 2 - 3 : 0);
       ctx.restore();
     }
 
@@ -765,4 +791,5 @@ const gateLogicDesc = type => GATE_LOGIC[type] ?? '';
 import { generateSnapPoints } from '../src/models/snapPoints.js';
 import { validateWiring } from '../src/models/wiring.js';
 import { componentSize, componentHits, nearestSnapIndex } from '../src/models/hitTest.js';
+import { isNeuron, transferOutput } from '../src/simulation/transfer.js';
 import { colorPaletteHtml, lightenHex, DEFAULT_BODY_COLOR } from './color.js';

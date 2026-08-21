@@ -171,7 +171,11 @@ export function vehicleSignature(doc) {
     r: c.localRotation != null ? round3(c.localRotation) : 0,
     p: c.props ?? null,
   }));
-  const gates = (d.logicGates ?? []).map(g => ({ t: g.type, pos: g.pos ? [round3(g.pos.x), round3(g.pos.y)] : null }));
+  // Node props are part of the signature: two Neurons that differ only in
+  // threshold/shape/spline are genuinely different configs (propagation must
+  // treat them as such). Boolean gates have no meaningful props, so this is a
+  // no-op for them.
+  const gates = (d.logicGates ?? []).map(g => ({ t: g.type, pos: g.pos ? [round3(g.pos.x), round3(g.pos.y)] : null, p: g.props ?? null }));
   // id -> ordinal, so wire endpoints are compared by position, not by string.
   const ord = {};
   (d.components ?? []).forEach((c, i) => { ord[c.id] = `c${i}`; });
