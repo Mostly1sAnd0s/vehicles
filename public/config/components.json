@@ -52,16 +52,6 @@
       "defaults": { "modelRef": "sensors.json#vehicle_detection", "range": 300, "aimAngle": 0, "fov": 3.141592653589793 }
     },
     {
-      "id": "generic_mount",
-      "name": "Sensor Mount",
-      "category": "mount",
-      "mass": 0.25,
-      "size": 6,
-      "shape": "circle",
-      "ports": [],
-      "defaults": {}
-    },
-    {
       "id": "gate_and",
       "name": "AND",
       "category": "logic",

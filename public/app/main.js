@@ -54,6 +54,17 @@ async function main() {
     tabWorld.classList.toggle('active', isWorld);
     $('panel-editor').classList.toggle('active', !isWorld);
     $('panel-world').classList.toggle('active', isWorld);
+    // Contextual top-bar chrome:
+    //  - the "Vehicle Editor" button is gone (reached via a vehicle's Edit control);
+    //  - "Done" (was "World") appears only while editing a vehicle;
+    //  - each page shows only its own load/save pair (the world buttons don't
+    //    operate on the editor's in-progress vehicle, and vice-versa).
+    tabEditor.hidden = true;
+    tabWorld.hidden = isWorld;
+    $('import-vehicle').hidden = isWorld;
+    $('export-vehicle').hidden = isWorld;
+    $('import-world').hidden = !isWorld;
+    $('export-world').hidden = !isWorld;
   }
 
   const editor = new VehicleEditor($('editor-canvas'), {
@@ -104,6 +115,7 @@ async function main() {
 
   tabEditor.onclick = () => activate('editor');
   tabWorld.onclick = () => { activate('world'); initWorldSim(); };
+  activate('editor'); // sync the top bar to the default (editor) view
 
   // simplify propagation: only track owner prototype after Edit
   const _onVehicleChanged = editor.hooks.onVehicleChanged;
@@ -196,8 +208,16 @@ async function main() {
   state.vehicleOwner = state.world.vehiclePrototypes[0] ?? null;
   state.vehicleOwner && (state.vehicleOwner._vehicle = clone(state.vehicle));
 
+  // Reflect the app version in the title bar. The number lives in package.json
+  // and is copied to public/config/version.json by scripts/sync-config.mjs on
+  // every build/serve, so bumping the version there updates the UI automatically.
+  try {
+    const v = JSON.parse(await load('config/version.json'));
+    if (v && v.version) $('app-brand').textContent = `Vehicle Sandbox v${v.version}`;
+  } catch { /* version file optional until a build has run; keep the static title */ }
+
   // debug/test handle (used by headless smoke tests)
-  window.__app = () => ({ state, get worldSim() { return worldSim; } });
+  window.__app = () => ({ state, get worldSim() { return worldSim; }, get editor() { return editor; } });
 }
 
 function clone(x) { return JSON.parse(JSON.stringify(x)); }

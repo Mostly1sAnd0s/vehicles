@@ -2,24 +2,29 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Braitenberg Vehicles</title>
+<title>Vehicle Sandbox</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="style.css">
 <script src="vendor/matter.min.js"></script>
 </head>
 <body>
 <header id="topbar">
-  <span class="brand">Braitenberg Vehicles</span>
+  <span class="brand" id="app-brand">Vehicle Sandbox</span>
   <nav>
-    <button id="tab-editor" class="tab active">Vehicle Editor</button>
-    <button id="tab-world" class="tab">World</button>
+    <!-- "Vehicle Editor" button removed: the editor is reached via a vehicle's Edit
+         Vehicle control in the world. The element stays in the DOM (hidden) because
+         the headless smoke probes navigate to it by id. -->
+    <button id="tab-editor" class="tab active" hidden>Vehicle Editor</button>
+    <!-- "World" is relabelled "Done" and shown only while editing a vehicle. -->
+    <button id="tab-world" class="tab">Done</button>
   </nav>
   <div class="spacer"></div>
   <select id="recent-select" title="Recent files"><option value="">Recents…</option></select>
   <button id="import-vehicle" title="Import a vehicle JSON file">⤓ Vehicle</button>
   <button id="export-vehicle" title="Download the current vehicle as JSON">⤒ Vehicle</button>
-  <button id="import-world" title="Import a world JSON file">⤓ World</button>
-  <button id="export-world" title="Download the current world as JSON">⤒ World</button>
+  <!-- World load/save only makes sense on the World page; hidden while editing. -->
+  <button id="import-world" title="Import a world JSON file" hidden>⤓ World</button>
+  <button id="export-world" title="Download the current world as JSON" hidden>⤒ World</button>
   <input type="file" id="file-input" accept=".json" hidden>
 </header>
 
@@ -33,6 +38,7 @@
       <div id="gate-palette"></div>
       <h3>Body</h3>
       <div id="body-color"></div>
+      <div class="pane-footer">Designed by Adam Kemp, 2026</div>
     </aside>
     <div class="canvas-wrap">
       <canvas id="editor-canvas"></canvas>
@@ -57,6 +63,7 @@
       <h3>Vehicles</h3>
       <button id="add-vehicle">+ Add Vehicle</button>
       <div id="prototypes"></div>
+      <div class="pane-footer">Designed by Adam Kemp, 2026</div>
     </aside>
     <div class="canvas-wrap">
       <canvas id="world-canvas"></canvas>

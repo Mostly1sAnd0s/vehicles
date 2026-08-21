@@ -189,7 +189,11 @@ export class VehicleEditor {
   toLocal(e) {
     const r = this.canvas.getBoundingClientRect();
     const s = this._scale();
-    return { x: (e.clientX - r.left - r.width / 2) / s, y: (e.clientY - r.top - r.height / 2) / s };
+    // Centre on clientWidth/Height exactly as draw() does (ctx.translate + buffer
+    // sizing both use those). getBoundingClientRect can differ slightly under
+    // fractional flex layouts, which would otherwise desync pointer<->world coords.
+    return { x: (e.clientX - r.left - this.canvas.clientWidth / 2) / s,
+             y: (e.clientY - r.top - this.canvas.clientHeight / 2) / s };
   }
 
   // snap a dragged component onto a node: center offset along the node normal

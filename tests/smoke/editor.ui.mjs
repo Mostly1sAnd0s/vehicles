@@ -98,10 +98,13 @@ try {
       const wheelBtn = btns.find(b => b.textContent.includes('Powered Wheel'));
       wheelBtn.click();
 
-      // canvas point for a top-right interior snap (x=40+? use top edge midpoint: local (0,-20))
-      const scale = Math.min(rect.width / 320, rect.height / 240);
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
+      // canvas point for a top-right interior snap (x=40+? use top edge midpoint: local (0,-20)).
+      // Use canvas.clientWidth/Height (not getBoundingClientRect) so this inverts the
+      // editor's own transform exactly: the editor centres + scales on clientWidth/Height
+      // (editor.js draw()), and content-fit side panes can make rect.* differ slightly.
+      const scale = Math.min(canvas.clientWidth / 320, canvas.clientHeight / 240);
+      const cx = rect.left + canvas.clientWidth / 2;
+      const cy = rect.top + canvas.clientHeight / 2;
       const snapLocalX = -40 + 80 / 3; // first interior point on top edge
       const pt = { x: cx + snapLocalX * scale, y: cy + (-20) * scale };
       canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: pt.x, clientY: pt.y, bubbles: true }));
@@ -127,7 +130,15 @@ try {
       const sr = v.components.find(c => c.id === 'sR');
       const before = { ...sr.local };
       const targetSnapLocal = { x: -40 + 80 / 3, y: -20 }; // interior point on top edge
-      const toScreen = lp => ({ x: cx + lp.x * scale, y: cy + lp.y * scale });
+      // Re-read geometry NOW: placing the wheel above populated the inspector pane,
+      // which grew (flex: 0 1 auto) and shrank the flex:1 canvas — so the cx/scale
+      // captured at the top of this IIFE are stale. Mirror the editor's own live
+      // transform instead (editor.js draw() centres on clientWidth/2, scales by _viewScale).
+      const s2 = app.editor._viewScale;
+      const r2 = canvas.getBoundingClientRect();
+      const cx2 = r2.left + canvas.clientWidth / 2;
+      const cy2 = r2.top + canvas.clientHeight / 2;
+      const toScreen = lp => ({ x: cx2 + lp.x * s2, y: cy2 + lp.y * s2 });
       const fromS = toScreen(before);
       const toS = toScreen(targetSnapLocal);
       canvas.dispatchEvent(new MouseEvent('mousedown', { clientX: fromS.x, clientY: fromS.y, bubbles: true }));

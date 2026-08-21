@@ -32,6 +32,9 @@ body {
 .brand { font-weight: 600; margin-right: 12px; letter-spacing: 0.3px; }
 .spacer { flex: 1; }
 
+/* Contextual top-bar controls: hidden per active tab (see main.js activate()). */
+#topbar > [hidden] { display: none !important; }
+
 button, select, input[type="number"], input[type="range"] {
   background: var(--panel2);
   color: var(--text);
@@ -56,21 +59,42 @@ main { flex: 1; min-height: 0; display: flex; }
 .tab-panel.active { display: flex; }
 
 .side {
-  width: 210px;
+  /* Width grows to fit its content (no horizontal scrollbar) rather than a fixed
+     210px. min/max clamp it so long labels stretch the pane but don't swallow the
+     canvas; overflow-x + overflow-wrap hide/wrap any single over-wide element. */
+  flex: 0 1 auto;
+  min-width: 160px;
+  max-width: 250px;
   background: var(--panel);
   border-right: 1px solid var(--line);
   padding: 10px;
   overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: break-word;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+/* Attribution pinned to the bottom of each side pane (all pages). */
+.pane-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  color: var(--dim);
+  font-size: 11px;
 }
 #editor-inspector { border-right: none; border-left: 1px solid var(--line); }
 .side h3 { margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
 #palette button, #world-side > button { width: 100%; margin: 3px 0; text-align: left; }
 #palette button.placing { border-color: var(--accent); background: rgba(77,163,255,.15); }
 
-.canvas-wrap { flex: 1; position: relative; min-width: 0; }
+/* Floor the canvas so content-sized side panes can't collapse it below a usable
+   size (body stays large enough to read + pick up); panes still shrink in narrow
+   viewports rather than force a horizontal scrollbar. */
+.canvas-wrap { flex: 1; position: relative; min-width: 300px; }
+@media (max-width: 760px) {
+  .canvas-wrap { min-width: 0; }
+  .side { min-width: 140px; }
+}
 canvas { display: block; width: 100%; height: 100%; }
 
 ul.plain, #placed-list, #wire-list { list-style: none; margin: 0; padding: 0; }

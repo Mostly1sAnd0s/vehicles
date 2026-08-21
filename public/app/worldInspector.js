@@ -3,6 +3,31 @@
  */
 export function renderWorldInspector(sim) {
     const box = sim.ui.worldInspector;
+
+    // A running vehicle takes the inspector over an element: show + edit its live
+    // pose (X/Y/Rot), exactly like a selected light/rock/wall.
+    if (sim.selectedInstance && !sim.instances.includes(sim.selectedInstance)) sim.selectedInstance = null;
+    const inst = sim.selectedInstance;
+    if (inst && inst.body) {
+      const proto = sim.worldDoc.vehiclePrototypes.find(p => p.id === inst.protoId);
+      box.style.display = 'block';
+      box.innerHTML = `
+        <h3 style="margin:0 0 6px">${proto ? proto.name : 'Vehicle'}</h3>
+        <label>X <input type="number" id="wi-ix" value="${Math.round(inst.body.position.x)}"></label>
+        <label>Y <input type="number" id="wi-iy" value="${Math.round(inst.body.position.y)}"></label>
+        <label>Rot&deg; <input type="number" id="wi-ir" step="5" value="${Math.round(inst.body.angle * 180 / Math.PI)}"></label>`;
+      const apply = () => {
+        sim.setInstancePose(
+          inst,
+          Number(box.querySelector('#wi-ix').value),
+          Number(box.querySelector('#wi-iy').value),
+          Number(box.querySelector('#wi-ir').value) * Math.PI / 180);
+        sim.renderInspector();
+      };
+      for (const id of ['wi-ix', 'wi-iy', 'wi-ir']) box.querySelector('#' + id).addEventListener('change', apply);
+      return;
+    }
+
     const el = sim.selectedElement ? sim.worldDoc.elements.find(e => e.id === sim.selectedElement) : null;
     if (!el) { box.style.display = 'none'; return; }
     box.style.display = 'block';

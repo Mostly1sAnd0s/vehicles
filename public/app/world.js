@@ -30,6 +30,7 @@ export class WorldSim {
     this.playing = false;
     this.beams = true;
     this.selectedElement = null;
+    this.selectedInstance = null;   // a running vehicle shown in the inspector (X/Y/Rot)
     this.stepCount = 0;        // monotonic sim-step counter (drives cooldownTicks)
     this.convertedCount = 0;   // total instances converted this run (reset on reset())
     this.instances = [];          // {id, protoId, body, seed:{x,y,rotation}}
@@ -341,16 +342,22 @@ export class WorldSim {
       // instance drag takes precedence: a robot on top of an element gets grabbed first
       const inst = findInstanceAt(this.instances, pid => this.prototypeVehicle(pid), w, this.view.zoom);
       if (inst) {
+        // Grab the robot AND surface it in the inspector (X/Y/Rot), like elements.
+        this.selectedInstance = inst;
+        this.selectedElement = null;
+        this.renderInspector();
         drag = { mode: 'instance', inst };
         return;
       }
       const el = this.hitElement(w);
       if (el) {
         this.selectedElement = el.id;
+        this.selectedInstance = null;
         drag = { mode: 'element', el, started: { x: el.position.x, y: el.position.y }, mouse: w };
         this.renderInspector();
       } else {
         this.selectedElement = null;
+        this.selectedInstance = null;
         this.renderInspector();
         drag = { mode: 'pan', view0: { ...this.view }, e0: { x: e.clientX, y: e.clientY } };
       }
@@ -458,6 +465,17 @@ export class WorldSim {
     this.renderInspector();
   }
 
+  // Move a running vehicle to an explicit pose (used by the inspector) and adopt
+  // it as the seed so Reset restores that exact placement.
+  setInstancePose(inst, x, y, rot) {
+    if (!inst || !inst.body) return;
+    M_BodySetPosition(this.M, inst.body, { x, y });
+    M_BodySetAngle(this.M, inst.body, rot);
+    inst.body.velocity = { x: 0, y: 0 };
+    inst.body.angularVelocity = 0;
+    inst.seed = { x, y, rotation: rot };
+  }
+
   reset() {
     let hadPropagation = false;
     for (const inst of this.instances) {
@@ -517,32 +535,40 @@ export class WorldSim {
   protoAction(proto, act) {
     const center = this.toWorld({ clientX: this.canvas.getBoundingClientRect().left + this.canvas.clientWidth / 2,
                                   clientY: this.canvas.getBoundingClientRect().top + this.canvas.clientHeight / 2 });
+    // Documented seeds (proto.instances[i].position/.rotation) and the running
+    // mirror (this.instances[i].seed) must BOTH move: reset() re-seats bodies from
+    // the running .seed, while saves export the documented position. Previously
+    // only `.seed` was written on the documented object (which has none), so these
+    // buttons threw and appeared to do nothing.
+    const runs = this.instances.filter(i => i.protoId === proto.id);
+    const setSeed = (i, x, y, rot) => {
+      const d = proto.instances[i];
+      if (!d) return;
+      d.position = { x, y };
+      d.rotation = rot;
+      if (runs[i]) runs[i].seed = { x, y, rotation: rot };
+    };
     if (act === 'here') {
       this.ensureCount(proto, proto.instances.length + 1, center);
     } else if (act === 'random') {
       const r = this.viewRadius();
-      for (const inst of proto.instances) {
-        inst.seed.x = center.x + (Math.random() - 0.5) * 2 * r;
-        inst.seed.y = center.y + (Math.random() - 0.5) * 2 * r;
-        inst.seed.rotation = Math.random() * Math.PI * 2;
-      }
+      proto.instances.forEach((_, i) => setSeed(i,
+        center.x + (Math.random() - 0.5) * 2 * r,
+        center.y + (Math.random() - 0.5) * 2 * r,
+        Math.random() * Math.PI * 2));
       this.reset();
     } else if (act === 'line') {
       const n = proto.instances.length;
-      proto.instances.forEach((inst, i) => {
-        inst.seed.x = center.x + (i - (n - 1) / 2) * 130;
-        inst.seed.y = center.y;
-        inst.seed.rotation = 0;
-      });
+      proto.instances.forEach((_, i) => setSeed(i, center.x + (i - (n - 1) / 2) * 130, center.y, 0));
       this.reset();
     } else if (act === 'grid') {
       const n = proto.instances.length;
-      const cols = Math.ceil(Math.sqrt(n));
-      proto.instances.forEach((inst, i) => {
-        inst.seed.x = center.x + (i % cols - (cols - 1) / 2) * 130;
-        inst.seed.y = center.y + (Math.floor(i / cols) - (Math.ceil(n / cols) - 1) / 2) * 130;
-        inst.seed.rotation = 0;
-      });
+      const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+      const rows = Math.max(1, Math.ceil(n / cols));
+      proto.instances.forEach((_, i) => setSeed(i,
+        center.x + (i % cols - (cols - 1) / 2) * 130,
+        center.y + (Math.floor(i / cols) - (rows - 1) / 2) * 130,
+        0));
       this.reset();
     } else if (act === 'edit') {
       this.hooks.openEditor(proto);
@@ -559,7 +585,10 @@ export class WorldSim {
     while (insts.length < n) {
       insts.push({
         id: `inst_${Date.now().toString(36)}_${insts.length}`,
-        position: at ?? { x: this.view.x + (Math.random() - 0.5) * 100, y: this.view.y + (Math.random() - 0.5) * 100 },
+        // No explicit drop point: spread across the visible area (not a tight ±50
+        // cluster at the origin, which read as "a pile at center").
+        position: at ?? { x: this.view.x + (Math.random() - 0.5) * this.viewRadius(),
+                          y: this.view.y + (Math.random() - 0.5) * this.viewRadius() },
         rotation: Math.random() * Math.PI * 2,
       });
     }
