@@ -132,7 +132,11 @@ async function main() {
   function initCoop() {
     if (coop) return coop;
     coop = new CoopWorld($('coop-canvas'), {
-      ui: { name: $('coop-name'), url: $('coop-url'), connect: $('coop-connect'), status: $('coop-status'), deploy: $('coop-deploy') },
+      ui: {
+        name: $('coop-name'), url: $('coop-url'), connect: $('coop-connect'), status: $('coop-status'), deploy: $('coop-deploy'),
+        start: $('coop-start'), pause: $('coop-pause'), reset: $('coop-reset'),
+        fleet: $('coop-fleet'), fleetSet: $('coop-fleet-set'), perm: $('coop-perm'),
+      },
       getVehicle: () => state.vehicle,
     });
     return coop;

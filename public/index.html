@@ -92,6 +92,17 @@
       <div id="coop-status" class="dim">not connected</div>
       <h3>Your bot</h3>
       <button id="coop-deploy" title="Push your current design into the shared world (owner-only)">Deploy current design</button>
+      <h3>Session · admin</h3>
+      <div class="coop-row">
+        <button id="coop-start" title="Start the shared simulation (admin)">▶ Start</button>
+        <button id="coop-pause" title="Pause the shared simulation (admin)">⏸ Pause</button>
+        <button id="coop-reset" title="Return every bot to its spawn point (admin)">↺ Reset</button>
+      </div>
+      <div class="coop-row">
+        <label class="coop-fleet">Fleet<input type="number" id="coop-fleet" min="1" max="50" value="1"></label>
+        <button id="coop-fleet-set" title="Resize the fleet of your design (admin)">Set</button>
+      </div>
+      <div id="coop-perm" class="dim">connect to see what you can run</div>
       <div class="pane-footer">One shared world · read-only view · collisions on</div>
     </aside>
     <div class="canvas-wrap">

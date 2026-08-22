@@ -87,6 +87,10 @@ main { flex: 1; min-height: 0; display: flex; }
 
 /* Co-op join form (M2): stacked labels, full-width inputs */
 .dim { color: var(--dim); }
+#coop-side .coop-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+#coop-side .coop-row button { flex: 1; padding: 4px 2px; }
+#coop-side label.coop-fleet { flex-direction: row; justify-content: space-between; flex: 1; margin: 4px 0; }
+#coop-side #coop-fleet { width: 56px; }
 #coop-side label { flex-direction: column; align-items: stretch; gap: 3px; }
 #coop-side input[type="text"] { width: 100%; box-sizing: border-box; margin: 0; }
 #coop-status { min-height: 15px; margin: 8px 0; }

@@ -148,8 +148,8 @@ export class HeadlessWorld {
       if (!inst.body) continue;
       M_BodySetPosition(this.M, inst.body, { x: inst.seed.x, y: inst.seed.y });
       M_BodySetAngle(this.M, inst.body, inst.seed.rotation ?? 0);
-      M.Body.setVelocity(inst.body, { x: 0, y: 0 });
-      M.Body.setAngularVelocity(inst.body, 0);
+      this.M.Body.setVelocity(inst.body, { x: 0, y: 0 });
+      this.M.Body.setAngularVelocity(inst.body, 0);
     }
   }
 

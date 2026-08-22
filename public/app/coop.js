@@ -45,9 +45,14 @@ export class CoopWorld {
     const c = this.client;
     // Status line + lifecycle, driven by the message stream.
     c.onMessage((m) => {
-      if (this.ui.status && m.type === 'closed') this.setStatus('disconnected');
-      else if (m.type === 'peerDeployed' && this.ui.status) this.setStatus(`${m.name} deployed a bot`);
-      else if (m.type === 'countSet' && this.ui.status) this.setStatus(`clones set to ${m.count}`);
+      if (this.ui.status) {
+        if (m.type === 'closed') this.setStatus('disconnected');
+        else if (m.type === 'deployed') this.setStatus(`Deployed ✓ your design is in the world (${m.count} clone${m.count === 1 ? '' : 's'})`);
+        else if (m.type === 'peerDeployed') this.setStatus(`${m.name} deployed a bot`);
+        else if (m.type === 'countSet') this.setStatus(`fleet set to ${m.count}`);
+        else if (m.type === 'error') this.setStatus(`⚠ ${m.error}`);
+      }
+      if (m.type === 'state' || m.type === 'welcome') this.refreshControls();
       this.requestRender(); // any message that may have changed the world (snapshot, welcome…)
     });
 
@@ -57,6 +62,16 @@ export class CoopWorld {
       this.ui.name?.addEventListener('keydown', (e) => { if (e.key === 'Enter') enter(); });
     }
     if (this.ui.deploy) this.ui.deploy.addEventListener('click', () => this.deploy());
+
+    // Session controls (M3): admin-only on the server; disabled for participants below.
+    if (this.ui.start) this.ui.start.addEventListener('click', () => this.controls('start'));
+    if (this.ui.pause) this.ui.pause.addEventListener('click', () => this.controls('pause'));
+    if (this.ui.reset) this.ui.reset.addEventListener('click', () => this.controls('reset'));
+    if (this.ui.fleetSet) this.ui.fleetSet.addEventListener('click', () => {
+      const n = Math.max(1, Math.min(50, parseInt(this.ui.fleet?.value, 10) || 1));
+      this.client.setCount(this.client.you?.protoId, n);
+    });
+    this.refreshControls(); // initial state: not connected -> all locked
 
     // Local pan/zoom so a participant can follow their bots.
     let drag = null;
@@ -104,11 +119,12 @@ export class CoopWorld {
       return;
     }
     this._snap = worldElementsToSnapshot(c.elements);
+    this.refreshControls();
     this.setStatus(`connected as ${c.you?.name} (${c.you?.role}) · ${c.bots.length} bot(s) in the world`);
     this.requestRender();
   }
 
-  /** Push the current design into the shared world (owner-only on the server; preview of M3). */
+  /** Push the current design into the shared world (owner-only on the server). */
   deploy() {
     const c = this.client;
     if (c.status !== 'connected') { this.setStatus('not connected'); return; }
@@ -116,6 +132,33 @@ export class CoopWorld {
     if (!v) { this.setStatus('no design to deploy yet'); return; }
     c.deploy(v);
     this.setStatus(`deploying your design… (running as ${c.you?.name})`);
+  }
+
+  /** Send a session control (start/pause/reset); admin-only on the server. */
+  controls(command) {
+    const c = this.client;
+    if (c.status !== 'connected') { this.setStatus('not connected'); return; }
+    c.controls(command);
+  }
+
+  /** Reflect role + running state in the session controls (client-side ownership locks). */
+  refreshControls() {
+    const c = this.client;
+    const you = c.you;
+    const isAdmin = !!you && you.role === 'admin';
+    const dis = (el, d) => { if (el) el.disabled = d; };
+    dis(this.ui.start, !isAdmin || c.running);   // Start is moot while already running
+    dis(this.ui.pause, !isAdmin || !c.running);  // Pause is moot while paused
+    dis(this.ui.reset, !isAdmin);
+    dis(this.ui.fleetSet, !isAdmin);
+    if (this.ui.fleet) this.ui.fleet.disabled = !isAdmin;
+    if (this.ui.perm) {
+      this.ui.perm.textContent = !you
+        ? 'connect to see what you can run'
+        : isAdmin
+          ? `admin · controls unlocked · ${c.bots.length} bot(s)`
+          : `${you.role} · read-only — only the admin runs the session`;
+    }
   }
 
   requestRender() {

@@ -74,6 +74,8 @@ export class CoopClient {
         } else if (msg.type === 'snapshot') {
           this.bots = (msg.bots ?? []).map(normalizeBot);
           this.tick = msg.t ?? this.tick;
+        } else if (msg.type === 'state') {
+          this.running = !!msg.running;   // authoritative running flag echoed by start/pause/reset
         } else if (msg.type === 'error') {
           this.lastError = msg.error ?? 'server error';
         }

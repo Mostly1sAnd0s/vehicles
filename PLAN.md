@@ -578,4 +578,24 @@ positions/sensor readings at ~10–20 Hz.
   tick + both participants observe the *same* world), admin-only `setCount` refused for a participant,
   and admin `setCount(3)` expands the fleet in every view. Full unit suite **230/230** and all four
   browser smoke tests green (SPA boots with the new tab).
-- [ ] M3 deploy bridge + ownership locks — next.
+### M3 status — deploy bridge + ownership locks
+- [x] **Deploy bridge** — `public/app/main.js` passes `getVehicle: () => state.vehicle` into
+  `CoopWorld`, so the Co-op tab's "Deploy current design" pushes the editor's live vehicle into
+  *your* slot (the server enforces owner-only by construction — a deploy message carries no protoId).
+- [x] **Admin panel** — `public/index.html` adds a "Session · admin" block (Start / Pause / Reset +
+  fleet size); `public/app/coop.js` wires them. Fleet control resizes the acting user's own
+  prototype; selecting *other* participants' fleets is an M4 enhancement.
+- [x] **Ownership locks** — `CoopWorld.refreshControls()` gates every session control on
+  `you.role === 'admin'`: participants see them disabled with a "read-only — only the admin runs
+  the session" note (Start/Pause additionally track the live running flag). The server is the real
+  backstop; this is the client reflection of it.
+- [x] **Live running state** — `src/net/client.js` now tracks `running` from authoritative `state`
+  messages (start/pause/reset echo one), so Start/Pause enable/disable against the true sim state.
+- [x] **Bug fixed:** `src/simulation/worldSim.js` `reset()` called bare `M.Body.setVelocity` where
+  `M` was undefined → a `ReferenceError` that escaped the WS handler and *crashed the server* on any
+  admin reset. Now `this.M.Body.…`. Exposed by M3's admin Reset.
+- [x] `tests/multiplayer.client.test.js` adds an M3 e2e: two participants each deploy their own
+  design (ownership isolated — one distinct owner per bot, cross-deploy can't touch another's
+  fleet), then admin start→real motion→pause→**reset restores every bot to its spawn with zero
+  velocity**. Full unit suite **231/231**, no hangs; all four browser smoke tests green.
+- [ ] M4 polish: per-participant fleet selection, rejoin keeps deployed bots, metrics/spectator.
