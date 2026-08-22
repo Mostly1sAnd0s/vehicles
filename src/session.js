@@ -91,6 +91,7 @@ export class Session {
     if (!p) return;
     this._sendTo(token, {
       type: 'welcome',
+      code: this.code, // set by the gateway (world code); omitted on the wire when undefined
       running: this.running,
       you: { name: p.name, role: p.role, protoId: p.protoId },
       world: { elements: this.world.worldDoc.elements ?? [], bots: this._wireBots() },

@@ -598,4 +598,25 @@ positions/sensor readings at ~10–20 Hz.
   design (ownership isolated — one distinct owner per bot, cross-deploy can't touch another's
   fleet), then admin start→real motion→pause→**reset restores every bot to its spawn with zero
   velocity**. Full unit suite **231/231**, no hangs; all four browser smoke tests green.
-- [ ] M4 polish: per-participant fleet selection, rejoin keeps deployed bots, metrics/spectator.
+### M5 — revised co-op UX (pivot; supersedes the Co-op tab)
+The separate "Co-op tab that clears the screen" + "first-joiner-is-admin" model is clunky and left
+no way back to editing. Revised model: **one always-on gateway** hosting many **6-char coded
+worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEMENTS/VEHICLES); the
+**World canvas IS the shared world** (host edits run like single-player and sync out). Roles:
+**host** (full control of that world) vs **joiners** (deploy their own vehicles; leaving prunes them).
+
+- [x] **Phase 1 — gateway + code worlds.** `src/net/gateway.js` hosts a `Map<code, Session>`; first
+  message `{type:'host'}` creates a world (returns its code; that client becomes its admin) or
+  `{type:'join',code}` enters one (participant); every join/leave fans out
+  `{type:'roster',clients}`; a leaving socket prunes its bots and an emptied world is GC'd. One
+  step+broadcast loop iterates all worlds. `src/session.js` welcome now carries the world `code`.
+  `scripts/serve-coop-gateway.mjs` = one-command launcher (`/health`, LAN hint). **Bug fixed:**
+  removed a duplicate `serve:coop` key in `package.json`; it now runs the gateway (old single-world
+  server kept as `serve:coop:single`). `tests/multiplayer.gateway.test.js` e2e over real sockets:
+  host→code, join by code, wrong-code refused, roster on both, per-host world isolation, prune+GC.
+  Full unit suite **232/232**, no hangs.
+- [ ] **Phase 2 — CO-OP pane in the World sidebar.** Host button (→ code + server IP + client count)
+  and a Join button + code box (→ becomes Disconnect when connected). Remove the standalone Co-op tab.
+- [ ] **Phase 3 — bind host's world to the shared world.** host add/drag/run syncs out to joiners;
+  remote vehicles appear in the host's Vehicles list.
+- [ ] **Phase 4 — host list management.** add/remove (not edit) other participants' vehicles.
