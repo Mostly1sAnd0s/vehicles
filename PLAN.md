@@ -288,6 +288,7 @@ outputs (sensors, logic gates, Neurons):
 ## Status (updated — body color + vehicle-detection-sensor sessions; includes prior sensor/motor tuning)
 
 ### Implemented
+- **Neuron (§4) + multi-output taps (§4.2):** interactive response editor in the inspector — shape selector (bell / triangle / custom), peak-intensity slider, bell-width (sigma) slider, and a draggable custom-spline editor (add/remove nodes; point-drag writes `props.spline`). Every output component now exposes an **"Add Output"** button that grows per-instance taps (`out`, `out1`, …); input connection slots enumerate each source's taps, so one sensor can drive several parts from its own side. Model: `src/simulation/transfer.js` (pre-existing) + dynamic-output ports in `src/models/wiring.js` (`outputPorts` / `outputPortIds`). Verified by unit tests (`tests/transfer.test.js`, `tests/logicWiring.test.js`) and headless UI smoke `tests/smoke/neurons.outputs.mjs` (`npm run smoke:neurons`).
 - Light sensing normalized linearly in *distance* (`lightLevelNormalized`): a dim source responds from a real range with no near-source cliff; inverse-square physics still sets the sensing window (radius = min(range, sqrt(I/T)), full scale at sqrt(I/F)). Replaces the old level-linear map that made one polarity look "less sensitive" and only fired near a source.
 - Per-sensor FOV + wedge beams: each light sensor has `fov` (default 2 pi / omni) and `aimAngle`; beam drawn as a true triangular wedge whose length = effective sensing radius. Ghost-range fallback removed - no more misleading ring when nothing is in view.
 - On-body telemetry ("Values:" toggle): per-robot x/y, per-sensor level to output + distance-to-light, per-wheel signed force.
@@ -454,3 +455,105 @@ Implementation sketch:
 - `config/sensors.json` light: `detectionThreshold: 0.02`, `fullScaleRatio: 16`.
 - On-body readouts (Values toggle) show x/y, per-sensor level→output + distance-to-light,
   per-wheel signed force. Light beam = true sensing radius only (ghost-range fallback removed).
+
+## Multi-User / Co-op (planned → building)
+
+### Goal & confirmed decisions
+Many participants share **one world** and watch their own bot(s) interact with everyone
+else's, in real time. Confirmed choices (avoid school-specific terms in code/UI — use
+generic *session* / *participant*):
+- **Identity:** display name + auto token per participant. No accounts/passwords.
+- **Sessions:** one world per admin-run session (a short session id/code). Admin runs the
+  server; participants join by session id + a name.
+- **Deploy model (not live-edit):** the *last deployed* config keeps running while a
+  participant edits in their local lab. Editing never affects the running bot until they
+  press **Deploy**, which pushes the new doc to the shared world (all of that participant's
+  clones update, preserving each clone's current pose/momentum).
+- **Physics:** bots still collide/bump — the shared world runs the same matter-js engine the
+  single-player world already uses, so behavior is preserved.
+- **Scale/transport:** LAN, ≤ ~20 concurrent participants. WebSocket is the transport.
+- **Clones:** the **admin** decides how many clones each participant's bot has in the world
+  (not the client).
+
+### Core architecture: server-authoritative world + thin clients
+The single biggest decision: **the server runs one authoritative simulation; clients are
+renderers.** Participants do *not* each run their own world (that desyncs — 20 people would
+see 20 different realities). Instead the server steps everyone's bots together and broadcasts
+positions/sensor readings at ~10–20 Hz.
+- Guarantees every participant sees the *same* world and the same interactions, with no client
+  reconciliation or deterministic lockstep needed.
+- Cheap at class scale: ~30 bots × (x,y,angle) at 15 Hz is a few KB/s. The sim itself is
+  O(bots × components)/tick — trivial for <40 bodies in matter-js.
+- **Why the build risk is low here:** the sim is already pure and Node-runnable (`src/**` unit-
+  tested with `node --test`; matter-js runs headless; `public/src` is a symlink to `src`, so
+  browser + server share the same modules). We *extract* the loop, not rewrite it.
+
+### Ownership = why your "can't modify/move others" rule is nearly free
+- **Every bot has exactly one owner** (`ownerId`). There is no two-people-editing-one-object
+  case to resolve — the hardest part of multiplayer is absent.
+- Bots are self-propelled (sim-driven); there is no "drag someone else's bot" affordance, so
+  "can't move others" holds by construction. In the editor, non-owned bots are read-only/locked;
+  the server additionally **drops any mutation not from the owner** as a backstop.
+- The existing building experience (component/wire editing, gates, Neurons + response/spline
+  editor, multi-output, orientation) is **untouched** — we wrap it with a sync layer, not replace
+  it. Two mental spaces per participant: **my lab** (full local edit control over my bot) and
+  **the shared world** (read-only view of everyone's deployed bots, live).
+
+### Data model additions
+- Server `session = { id, started, bots: [ {protoId, ownerId, name, vehicle, count, deployedAt} ] }`.
+  - `vehicle` = the full bot doc currently running (what was last **deployed**).
+  - `count` = number of live clones in the world (admin-set).
+- Server holds a `HeadlessWorld` (the extracted sim) per session; each deployed bot → N
+  instances with stable `seed` poses. `Deploy` updates `vehicle` + rebuilds those N bodies in
+  place (pose/velocity preserved). `setCount` adds/removes clones around the last deploy pose.
+- Participant identity: `{ id, name, token, role: 'participant' | 'admin' }` in `session.users`.
+
+### Wire protocol (implemented — JSON over WebSocket; see `src/net/server.js`)
+- **C→S** (first message must be the join handshake)
+  - `{type:'join', name, role?}` → S replies `{type:'welcome', running, you:{name,role,protoId}, world:{elements,bots}}`.
+  - `{type:'deploy', vehicle}` — owner only (always the sender's own proto); acks `{type:'deployed', protoId, count}`, broadcasts `{type:'peerDeployed', protoId, name}`.
+  - `{type:'setCount', protoId?, count}` — admin only → broadcasts `{type:'countSet', protoId, count}`.
+  - `{type:'controls', command:'start'|'pause'|'reset'}` — admin only → broadcasts `{type:'state', running}`.
+- **S→C**
+  - `{type:'snapshot', t, bots:[{id,protoId,owner,x,y,angle,vx,vy}]}` at ~15 Hz to everyone (bots rounded on the wire).
+  - Errors (`{type:'error', error}`) are echoed to the offending actor only.
+- **Enforcement:** deploy is owner-only by construction (no protoId in the message — a participant can only push their own bot); `setCount`/controls require `role==='admin'`. Rejections are sent back as `{type:'error'}`. The first joiner (no role given) becomes the admin who runs the session.
+
+### Phases (each shippable + tested on its own)
+- **M0 — Headless shared world sim.** Extract the per-step loop from `world.js` into
+  `src/simulation/worldSim.js` (`HeadlessWorld`), runnable in Node with matter-js headless.
+  API: `addInstance`, `setCount(protoId,n,spawnAt)`, `deploy(protoId,vehicle)`, `reset()`,
+  `step(dtMs)`, `snapshot()`. Port friction + matter step + propagation + sensor→logic→actuation
+  faithfully. **Unit test:** two bots move, they collide/bump (positions react), snapshot is
+  JSON-serializable & stable, `deploy` updates a bot preserving pose, `setCount` adds/removes.
+- **M1 — WebSocket server + sessions. ✅ DONE.** Transport-agnostic `src/session.js`
+  (`Session`: participants, ownership, admin-only controls, snapshotting — unit-testable with no
+  sockets) wired to a thin `src/net/server.js` (ws handshake + 60Hz fixed-dt step + 15Hz snapshot
+  broadcast). Run one session: `npm run serve:coop [world.json]`. Tested headless: 6 socket-free
+  unit tests + a 2-participant real-WebSocket e2e (`tests/multiplayer.server.test.js`).
+- **M2 — Client: Join screen + shared-world view.** A "Join session" panel (session id/code +
+  name) → connect, then render the shared world **read-only** by reusing `worldDraw.js` over
+  the broadcast snapshot. The existing editor/lab stays local and fully intact alongside it.
+- **M3 — Deploy bridge + ownership locks.** Editor **Deploy** button sends the current bot doc to
+  the server (updates that participant's clones, pose preserved). Client locks/hides edit controls
+  on non-owned bots; server backstop enforces owner-only. Admin panel: per-bot clone counts,
+  start/pause/reset the session.
+- **M4 — Polish (optional):** rejoin keeps your deployed bots; per-participant metrics/spectate;
+  chat; a teacher/observer dashboard; save/load a session to file.
+
+### M0 status
+- [x] `src/simulation/worldSim.js` — `HeadlessWorld` extracted from `world.js` (matter-js
+  headless; friction + step + propagation + sensor→logic→actuation ported faithfully).
+- [x] `tests/multiplayer.sim.test.js` — proves motion, collision, serializable snapshot,
+  deploy-with-pose-preserve, and admin `setCount`.
+
+### M1 status
+- [x] `src/session.js` — `Session`: join (first = admin), owner-only deploy, admin-only
+  setCount/controls, leave, welcome; bots rounded on the wire; permission rejections echoed to the actor.
+- [x] `src/net/server.js` — `createVehicleServer({Matter, configs, worldDoc, port, host})`: ws join
+  handshake, socket→token routing, 60Hz fixed-dt step + 15Hz broadcast, clean `start()`/`close()`.
+- [x] `scripts/serve-session.mjs` + `npm run serve:coop` — runs a session (loads the app's config;
+  `COOP_PORT`, `COOP_HOST=0.0.0.0` to open to the LAN).
+- [x] `tests/multiplayer.server.test.js` — 6 unit + 1 e2e (two participants over WS: join, deploy,
+  both receive live snapshots, admin-only controls enforced over the wire). Full suite 229/229.
+- [ ] M2 client join view / [ ] M3 deploy bridge + locks — next.
