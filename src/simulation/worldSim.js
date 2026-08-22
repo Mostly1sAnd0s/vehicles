@@ -274,15 +274,23 @@ export class HeadlessWorld {
     return this.lastSnapshot;
   }
 
-  /** Serializable state for broadcast to clients (full precision; round on the wire). */
+  /**
+   * Serializable state for broadcast to clients. Carries enough per bot to render it faithfully
+   * (orientation + body size/color) without sending the whole vehicle doc — thin clients only need
+   * geometry, not the sensor/logic graph. Full precision here; the transport rounds on the wire.
+   */
   snapshot() {
     return {
       t: this.tick,
-      bots: this.instances.filter(i => i.body).map(i => ({
-        id: i.id, protoId: i.protoId, owner: i.owner ?? null,
-        x: i.body.position.x, y: i.body.position.y, angle: i.body.angle,
-        vx: i.body.velocity.x, vy: i.body.velocity.y,
-      })),
+      bots: this.instances.filter(i => i.body).map(i => {
+        const v = this.vehicleFor(i);
+        return {
+          id: i.id, protoId: i.protoId, owner: i.owner ?? null,
+          x: i.body.position.x, y: i.body.position.y, angle: i.body.angle,
+          vx: i.body.velocity.x, vy: i.body.velocity.y,
+          w: v?.body?.width ?? 80, h: v?.body?.height ?? 40, color: v?.body?.color ?? '#cc3333',
+        };
+      }),
     };
   }
 }

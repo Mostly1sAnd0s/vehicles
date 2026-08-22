@@ -555,5 +555,27 @@ positions/sensor readings at ~10–20 Hz.
 - [x] `scripts/serve-session.mjs` + `npm run serve:coop` — runs a session (loads the app's config;
   `COOP_PORT`, `COOP_HOST=0.0.0.0` to open to the LAN).
 - [x] `tests/multiplayer.server.test.js` — 6 unit + 1 e2e (two participants over WS: join, deploy,
-  both receive live snapshots, admin-only controls enforced over the wire). Full suite 229/229.
-- [ ] M2 client join view / [ ] M3 deploy bridge + locks — next.
+  both receive live snapshots, admin-only controls enforced over the wire).
+
+### M2 status — client join view
+- [x] `src/net/client.js` — `CoopClient`: the thin socket core. Reuses Node's built-in /
+  browser `WebSocket`, so one implementation runs in the page and under `node --test`. Methods:
+  `connect(url,name)` (resolves on `welcome`), `deploy`, `setCount`, `controls`, plus live
+  `bots`/`tick`/`running` state for the view. **Bug fixed here:** `setCount` was sending `{protoId,
+  n}` while the server reads `msg.count` → `Number(undefined)` = NaN → `||0` silently *wiped* the
+  fleet to zero; now sends `count` (matches the documented wire field).
+- [x] `public/app/coop.js` — `CoopWorld`: the read-only shared-world view. Reuses
+  `worldElementsToSnapshot` for static elements and worldDraw's visual conventions; renders on
+  snapshot arrival (~15Hz) rather than a hot rAF loop (snapshots replace bot state wholesale, so
+  redrawing at message rate is correct *and* cheaper); a single coalesced rAF handles local
+  pan/zoom. Join bar (name + server URL, both persisted) and a "Deploy current design" button that
+  ships the editor's live vehicle (a minimal preview of the full M3 bridge; server enforces owner).
+- [x] `public/index.html` + `public/app/main.js` — new **Co-op** tab (`panel-coop`) wired into
+  `activate()` (generalized to N tabs while preserving the exact editor/world chrome the smoke tests
+  assert) and lazily built in `initCoop()`.
+- [x] `tests/multiplayer.client.test.js` — e2e over real sockets against a running server:
+  join→`welcome` (identity + static elements), deploy→owned bot appears, live stream (advancing
+  tick + both participants observe the *same* world), admin-only `setCount` refused for a participant,
+  and admin `setCount(3)` expands the fleet in every view. Full unit suite **230/230** and all four
+  browser smoke tests green (SPA boots with the new tab).
+- [ ] M3 deploy bridge + ownership locks — next.

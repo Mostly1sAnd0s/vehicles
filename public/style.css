@@ -84,6 +84,13 @@ main { flex: 1; min-height: 0; display: flex; }
 }
 #editor-inspector { border-right: none; border-left: 1px solid var(--line); }
 .side h3 { margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
+
+/* Co-op join form (M2): stacked labels, full-width inputs */
+.dim { color: var(--dim); }
+#coop-side label { flex-direction: column; align-items: stretch; gap: 3px; }
+#coop-side input[type="text"] { width: 100%; box-sizing: border-box; margin: 0; }
+#coop-status { min-height: 15px; margin: 8px 0; }
+#coop-deploy { margin-top: 6px; }
 #palette button, #world-side > button { width: 100%; margin: 3px 0; text-align: left; }
 #palette button.placing { border-color: var(--accent); background: rgba(77,163,255,.15); }
 

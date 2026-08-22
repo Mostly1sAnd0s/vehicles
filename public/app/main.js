@@ -5,6 +5,7 @@
 
 import { VehicleEditor } from './editor.js';
 import { WorldSim } from './world.js';
+import { CoopWorld } from './coop.js';
 import { blankVehicle } from './prototypes.js';
 
 const $ = id => document.getElementById(id);
@@ -46,25 +47,40 @@ async function main() {
   // ---------- tabs ----------
   const tabEditor = $('tab-editor');
   const tabWorld = $('tab-world');
+  const tabCoop = $('tab-coop');
   let worldSim = null;
+  let coop = null;
 
   function activate(name) {
     const isWorld = name === 'world';
-    tabEditor.classList.toggle('active', !isWorld);
+    const isCoop = name === 'coop';
+    // active tab button + panel (N-tab safe).
+    tabEditor.classList.toggle('active', !isWorld && !isCoop);
     tabWorld.classList.toggle('active', isWorld);
-    $('panel-editor').classList.toggle('active', !isWorld);
+    tabCoop.classList.toggle('active', isCoop);
+    $('panel-editor').classList.toggle('active', !isWorld && !isCoop);
     $('panel-world').classList.toggle('active', isWorld);
+    $('panel-coop').classList.toggle('active', isCoop);
     // Contextual top-bar chrome:
     //  - the "Vehicle Editor" button is gone (reached via a vehicle's Edit control);
     //  - "Done" (was "World") appears only while editing a vehicle;
     //  - each page shows only its own load/save pair (the world buttons don't
     //    operate on the editor's in-progress vehicle, and vice-versa).
     tabEditor.hidden = true;
-    tabWorld.hidden = isWorld;
-    $('import-vehicle').hidden = isWorld;
-    $('export-vehicle').hidden = isWorld;
-    $('import-world').hidden = !isWorld;
-    $('export-world').hidden = !isWorld;
+    if (isCoop) {
+      // Co-op is a standalone shared-world view: no local editing chrome.
+      tabWorld.hidden = true;
+      $('import-vehicle').hidden = true;
+      $('export-vehicle').hidden = true;
+      $('import-world').hidden = true;
+      $('export-world').hidden = true;
+    } else {
+      tabWorld.hidden = isWorld;
+      $('import-vehicle').hidden = isWorld;
+      $('export-vehicle').hidden = isWorld;
+      $('import-world').hidden = !isWorld;
+      $('export-world').hidden = !isWorld;
+    }
   }
 
   const editor = new VehicleEditor($('editor-canvas'), {
@@ -113,8 +129,18 @@ async function main() {
     });
   }
 
+  function initCoop() {
+    if (coop) return coop;
+    coop = new CoopWorld($('coop-canvas'), {
+      ui: { name: $('coop-name'), url: $('coop-url'), connect: $('coop-connect'), status: $('coop-status'), deploy: $('coop-deploy') },
+      getVehicle: () => state.vehicle,
+    });
+    return coop;
+  }
+
   tabEditor.onclick = () => activate('editor');
   tabWorld.onclick = () => { activate('world'); initWorldSim(); };
+  tabCoop.onclick = () => { activate('coop'); initCoop(); };
   activate('editor'); // sync the top bar to the default (editor) view
 
   // simplify propagation: only track owner prototype after Edit
@@ -217,7 +243,7 @@ async function main() {
   } catch { /* version file optional until a build has run; keep the static title */ }
 
   // debug/test handle (used by headless smoke tests)
-  window.__app = () => ({ state, get worldSim() { return worldSim; }, get editor() { return editor; } });
+  window.__app = () => ({ state, get worldSim() { return worldSim; }, get editor() { return editor; }, get coop() { return coop; } });
 }
 
 function clone(x) { return JSON.parse(JSON.stringify(x)); }

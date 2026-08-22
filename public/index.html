@@ -17,6 +17,8 @@
     <button id="tab-editor" class="tab active" hidden>Vehicle Editor</button>
     <!-- "World" is relabelled "Done" and shown only while editing a vehicle. -->
     <button id="tab-world" class="tab">Done</button>
+    <!-- Co-op: join a shared, server-run world and watch your bot live (read-only view). -->
+    <button id="tab-coop" class="tab">Co-op</button>
   </nav>
   <div class="spacer"></div>
   <select id="recent-select" title="Recent files"><option value="">Recents…</option></select>
@@ -77,6 +79,23 @@
         <button id="btn-paths" title="Show the motion trail behind each robot">Paths: off</button>
       </div>
       <div id="world-inspector"></div>
+    </div>
+  </section>
+
+  <!-- ============ CO-OP TAB ============ -->
+  <section id="panel-coop" class="tab-panel">
+    <aside class="side" id="coop-side">
+      <h3>Join a session</h3>
+      <label>Name<input type="text" id="coop-name" placeholder="your name" maxlength="24"></label>
+      <label>Server<input type="text" id="coop-url" placeholder="ws://host:8090"></label>
+      <button id="coop-connect">Connect</button>
+      <div id="coop-status" class="dim">not connected</div>
+      <h3>Your bot</h3>
+      <button id="coop-deploy" title="Push your current design into the shared world (owner-only)">Deploy current design</button>
+      <div class="pane-footer">One shared world · read-only view · collisions on</div>
+    </aside>
+    <div class="canvas-wrap">
+      <canvas id="coop-canvas"></canvas>
     </div>
   </section>
 </main>
