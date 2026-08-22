@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateWiring } from '../src/models/wiring.js';
+import { validateWiring, outputPorts, outputPortIds } from '../src/models/wiring.js';
 
 // Component defs (the shape of components.json entries) with port kinds, so
 // gate nodes resolve their ports the same way body components do.
@@ -123,4 +123,59 @@ test('a wire into a non-existent gate input port is an unknown_port', () => {
     wires: [{ from: { componentId: 's1', port: 'out' }, to: { componentId: 'g1', port: 'in7' }, weight: 1 }],
   });
   assert.ok(codes(validateWiring(v, defs)).has('unknown_port'));
+});
+
+// ---- Multi-output ports (PLAN.md §4.2) -----------------------------------
+test('outputPorts: base port when the instance has no added outputs', () => {
+  assert.deepEqual(outputPorts({ id: 's1', type: 'light_sensor' }, defs.light_sensor).map(p => p.id), ['out']);
+});
+
+test('outputPorts: an added tap inherits the base output kind', () => {
+  const s = { id: 's1', type: 'light_sensor', outputs: ['out', 'out1'] };
+  assert.deepEqual(outputPorts(s, defs.light_sensor).map(p => p.id), ['out', 'out1']);
+  assert.ok(outputPorts(s, defs.light_sensor).every(p => p.kind === 'sensor_output'));
+  assert.deepEqual(outputPortIds(s, defs.light_sensor), ['out', 'out1']);
+});
+
+test('outputPorts: a component with no output ports yields none', () => {
+  assert.deepEqual(outputPorts({ id: 'w1', type: 'powered_wheel' }, defs.powered_wheel), []);
+});
+
+test('a wire from a sensor\'s added tap (out1) to a motor is valid', () => {
+  const v = veh({
+    components: [{ id: 's1', type: 'light_sensor', outputs: ['out', 'out1'] }, { id: 'w1', type: 'powered_wheel' }],
+    wires: [{ from: { componentId: 's1', port: 'out1' }, to: { componentId: 'w1', port: 'drive' }, weight: 1 }],
+  });
+  assert.equal(validateWiring(v, defs).length, 0);
+});
+
+test('a sensor can drive two different motors from two taps of itself', () => {
+  const v = veh({
+    components: [{ id: 's1', type: 'light_sensor', outputs: ['out', 'out1'] }, { id: 'wL', type: 'powered_wheel' }, { id: 'wR', type: 'powered_wheel' }],
+    wires: [
+      { from: { componentId: 's1', port: 'out' }, to: { componentId: 'wL', port: 'drive' }, weight: 1 },
+      { from: { componentId: 's1', port: 'out1' }, to: { componentId: 'wR', port: 'drive' }, weight: 1 },
+    ],
+  });
+  assert.equal(validateWiring(v, defs).length, 0);
+});
+
+test('a wire from a tap the sensor does not have is an unknown_port', () => {
+  const v = veh({
+    components: [{ id: 's1', type: 'light_sensor', outputs: ['out'] }, { id: 'w1', type: 'powered_wheel' }],
+    wires: [{ from: { componentId: 's1', port: 'out2' }, to: { componentId: 'w1', port: 'drive' }, weight: 1 }],
+  });
+  assert.ok(codes(validateWiring(v, defs)).has('unknown_port'));
+});
+
+test('a Neuron node supports added outputs (logic_out taps)', () => {
+  const n = { id: 'n1', type: 'neuron', outputs: ['out', 'out1'] };
+  assert.deepEqual(outputPortIds(n, defs.neuron ?? { ports: [{ id: 'in0', kind: 'logic_in' }, { id: 'out', kind: 'logic_out' }] }), ['out', 'out1']);
+  const v = veh({
+    components: [{ id: 'w1', type: 'powered_wheel' }],
+    logicGates: [n],
+    wires: [{ from: { componentId: 'n1', port: 'out1' }, to: { componentId: 'w1', port: 'drive' }, weight: 1 }],
+  });
+  const d2 = { ...defs, neuron: { category: 'logic', ports: [{ id: 'in0', kind: 'logic_in' }, { id: 'out', kind: 'logic_out' }] } };
+  assert.equal(validateWiring(v, d2).length, 0);
 });

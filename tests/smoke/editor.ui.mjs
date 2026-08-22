@@ -117,13 +117,13 @@ try {
 
       // wire via the wheel's own connection slot: pick a signal source (sensor)
       const inSel = document.querySelector('#inspector #conn-in-drive');
-      if (inSel) { inSel.value = 'sL'; inSel.dispatchEvent(new Event('change')); }
+      if (inSel) { inSel.value = 'sL|out'; inSel.dispatchEvent(new Event('change')); }
       const wireOk = v.wires.some(w => w.from.componentId === 'sL' && w.to.componentId === newComp.id);
       const errors = document.getElementById('wiring-errors').textContent;
 
       // re-picking the same source replaces (not duplicates) that wire
       const inSel2 = document.querySelector('#inspector #conn-in-drive');
-      if (inSel2) { inSel2.value = 'sL'; inSel2.dispatchEvent(new Event('change')); }
+      if (inSel2) { inSel2.value = 'sL|out'; inSel2.dispatchEvent(new Event('change')); }
       const noDup = v.wires.filter(w => w.from.componentId === 'sL' && w.to.componentId === newComp.id).length === 1;
 
       // ---- drag sR to a different snap node: it must snap in place and its wire must follow ----
@@ -320,7 +320,7 @@ try {
 
       // wire the NOT gate via its own connection slots (auto-selected on place)
       let nIn = document.querySelector('#inspector #conn-in-in0');
-      if (nIn) { nIn.value = sensor.id; nIn.dispatchEvent(new Event('change')); }
+      if (nIn) { nIn.value = sensor.id + '|out'; nIn.dispatchEvent(new Event('change')); }
       let nOut = document.querySelector('#inspector #conn-out-out');
       if (nOut) { nOut.value = 'act|' + wheel.id; nOut.dispatchEvent(new Event('change')); }
 
@@ -351,8 +351,8 @@ try {
           noExtraIn = !document.querySelector('#conn-in-in2');
           andOut = !!box.querySelector('#conn-out-out');
           // drive the slots; each change rebuilds the inspector, so re-query.
-          let s0 = box.querySelector('#conn-in-in0'); s0.value = sensor.id; s0.dispatchEvent(new Event('change'));
-          let s1 = document.querySelector('#conn-in-in1'); s1.value = gate.id; s1.dispatchEvent(new Event('change')); // feed in1 from the NOT gate's out
+          let s0 = box.querySelector('#conn-in-in0'); s0.value = sensor.id + '|out'; s0.dispatchEvent(new Event('change'));
+          let s1 = document.querySelector('#conn-in-in1'); s1.value = gate.id + '|out'; s1.dispatchEvent(new Event('change')); // feed in1 from the NOT gate's out
           let so = document.querySelector('#conn-out-out'); so.value = 'act|' + wheel.id; so.dispatchEvent(new Event('change'));
           const a0 = v.wires.find(w => w.to.componentId === andGate.id && w.to.port === 'in0');
           const a1 = v.wires.find(w => w.to.componentId === andGate.id && w.to.port === 'in1');

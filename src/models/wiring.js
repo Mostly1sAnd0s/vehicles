@@ -94,9 +94,33 @@ export function validateWiring(vehicle, defs = {}) {
   return errors;
 }
 
+/**
+ * The output ports a component/gate instance exposes. The base comes from the
+ * type def; an instance's `outputs` array (grown by the inspector's "Add Output"
+ * button, see PLAN.md §4.2) extends it with further taps that all share the base
+ * output kind. Every output component supports this — a sensor can drive many
+ * motors from its own side. Backward compatible: no `outputs` -> just the def port(s).
+ */
+export function outputPorts(comp, def) {
+  const base = (def?.ports ?? comp?.ports ?? []).filter(p => p.kind === 'sensor_output' || p.kind === 'logic_out');
+  if (!base.length) return [];
+  const ids = Array.isArray(comp?.outputs) && comp.outputs.length ? comp.outputs : base.map(p => p.id);
+  return ids.map(id => ({ id, kind: base[0].kind }));
+}
+
+export function outputPortIds(comp, def) {
+  return outputPorts(comp, def).map(p => p.id);
+}
+
 function portList(comp, defs) {
   if (!comp) return [];
-  return comp.ports ?? defs[comp.type]?.ports ?? [];
+  const def = defs[comp.type];
+  const ports = comp.ports ?? def?.ports ?? [];
+  // dynamically-added output taps ("Add Output") inherit the base output kind,
+  // so a wire may reference any of them even though only the base is in the def.
+  const have = new Set(ports.map(p => p.id));
+  const extra = outputPorts(comp, def).filter(p => !have.has(p.id));
+  return [...ports, ...extra];
 }
 
 function checkEndpoint(ref, role, components, errors, i, defs) {

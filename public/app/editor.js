@@ -163,8 +163,14 @@ export class VehicleEditor {
     window.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if ((e.key === 'Delete' || e.key === 'Backspace')) {
-        if (this.selectedComp) this.removeComponent(this.selectedComp);
-        else if (this.selectedWire !== null) this.state.vehicle.wires.splice(this.selectedWire, 1);
+        if (this.selectedComp) {
+          this.removeComponent(this.selectedComp);
+        } else if (this.selectedWire != null && this.selectedWire >= 0 &&
+                   this.selectedWire < this.state.vehicle.wires.length) {
+          // hitWire reports "no wire" as -1; only a real in-range index deletes.
+          this.state.vehicle.wires.splice(this.selectedWire, 1);
+          this.selectedWire = null; // don't let the next press hit the shifted index
+        }
         this.refresh();
       }
     });
@@ -269,15 +275,44 @@ export class VehicleEditor {
   // Fixed size for every gate box so the drawn symbol and wire anchors agree.
   gateBox() { return { w: 30, h: 14 }; }
 
-  // Point (vehicle-local) of a gate's connection stub. Inputs sit on the left
-  // edge (spread vertically, one per input port); the output sits on the right.
+  // Vertical offset of the i-th stub among n, centered on the box (y = 0). Evenly
+  // spaced and symmetric, so a single tap sits at centre and adding taps fans out
+  // equally above/below rather than piling on one side (was: 2nd tap jumped up).
+  rowY(i, n, h) {
+    if (n <= 1) return 0;
+    const outer = h / 2 - 1;                    // keep stubs just inside the box edge
+    const step = n === 2 ? outer * 0.5 : outer / ((n - 1) / 2);
+    return (i - (n - 1) / 2) * step;
+  }
+
+  // Rotate a center-relative vector by rot degrees (canvas +y is down). A node's
+  // orientation (g.rot = 0/90/180/270) moves its input/output stubs consistently.
+  rotateVec(x, y, rot) {
+    const r = ((rot ?? 0) * Math.PI) / 180;
+    const c = Math.cos(r), s = Math.sin(r);
+    return { x: x * c - y * s, y: x * s + y * c };
+  }
+
+  // Point (vehicle-local) of a gate's connection stub. Inputs sit on the LEFT
+  // edge, outputs on the RIGHT, each spread vertically and symmetric about centre;
+  // g.rot then orients the whole node so outputs can face away from the robot's
+  // front and wires stop crossing.
   gateAnchor(g, port) {
     const { w, h } = this.gateBox();
-    if (port === 'out') return { x: g.pos.x + w / 2 + 5, y: g.pos.y };
-    const inPorts = (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in');
-    const idx = Math.max(0, inPorts.findIndex(p => p.id === port));
-    const y = inPorts.length <= 1 ? 0 : -h / 4 + idx * (h / 2);
-    return { x: g.pos.x - w / 2 - 5, y: g.pos.y + y };
+    const outIds = outputPortIds(g, this.compDef(g.type));
+    const oi = outIds.indexOf(port);
+    let lx, ly;
+    if (oi >= 0) {
+      lx = w / 2 + 5;                           // right edge, just outside the box
+      ly = this.rowY(oi, outIds.length, h);
+    } else {
+      const inPorts = (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in');
+      const idx = Math.max(0, inPorts.findIndex(p => p.id === port));
+      lx = -(w / 2 + 5);                        // left edge
+      ly = this.rowY(idx, inPorts.length, h);
+    }
+    const rv = this.rotateVec(lx, ly, g.rot);
+    return { x: g.pos.x + rv.x, y: g.pos.y + rv.y };
   }
 
   // Anchor for a wire endpoint. For a gate with a known port, returns that
@@ -312,7 +347,8 @@ export class VehicleEditor {
   hitGate(p) {
     for (let i = (this.state.vehicle.logicGates ?? []).length - 1; i >= 0; i--) {
       const g = this.state.vehicle.logicGates[i];
-      if (Math.hypot(g.pos.x - p.x, g.pos.y - p.y) < 16) return g;
+      // radius covers a rotated box corner too (half-diagonal ~16.5 at w=30,h=14)
+      if (Math.hypot(g.pos.x - p.x, g.pos.y - p.y) < 18) return g;
     }
     return null;
   }
@@ -340,6 +376,9 @@ export class VehicleEditor {
   }
 
   removeComponent(id) {
+    // Gates/Neurons live in logicGates, not components — route to the right
+    // remover (this is what the Delete-key handler calls for the selection).
+    if (this.gate(id)) { this.removeGate(id); return; }
     const v = this.state.vehicle;
     v.components = v.components.filter(c => c.id !== id);
     v.wires = v.wires.filter(w => w.from.componentId !== id && w.to.componentId !== id);
@@ -423,23 +462,28 @@ export class VehicleEditor {
     // old global Wiring box. Choosing a value creates/replaces that wire.
     const ports = def?.ports ?? [];
     const inPorts = ports.filter(p => p.kind === 'actuator_input' || p.kind === 'logic_in');
-    const outPorts = ports.filter(p => p.kind === 'sensor_output' || p.kind === 'logic_out');
+    // Outputs are per-instance (multi-output, §4.2): a def base plus any taps
+    // grown via "Add Output". One Out selector is rendered per tap.
+    const outPorts = outputPorts(c, def);
     if (inPorts.length || outPorts.length) {
       const allGates = v.logicGates ?? [];
+      // Source options list every output TAP of each source so an input can pick
+      // a specific one; value "componentId|port".
       const srcOpts = [
-        ...v.components.filter(x => this.compDef(x.type)?.category === 'sensor').map(x => ({ id: x.id, label: `${x.id} · ${this.compDef(x.type).name ?? x.type} (out)` })),
-        ...allGates.filter(g => g.id !== c.id).map(g => ({ id: g.id, label: `${g.id} · ${this.compDef(g.type)?.name ?? g.type} (out)` })),
+        ...v.components.filter(x => this.compDef(x.type)?.category === 'sensor').flatMap(x => outputPortIds(x, this.compDef(x.type)).map(pid => ({ id: `${x.id}|${pid}`, label: `${x.id} · ${this.compDef(x.type).name ?? x.type} (out${pid === 'out' ? '' : pid})` }))),
+        ...allGates.filter(g => g.id !== c.id).flatMap(g => outputPortIds(g, this.compDef(g.type)).map(pid => ({ id: `${g.id}|${pid}`, label: `${g.id} · ${this.compDef(g.type)?.name ?? g.type} (out${pid === 'out' ? '' : pid})` }))),
       ];
       const dstOpts = [
         ...v.components.filter(x => this.compDef(x.type)?.category === 'actuator').map(x => ({ id: `act|${x.id}`, label: `${x.id} · ${this.compDef(x.type).name ?? x.type}` })),
         ...allGates.flatMap(g => g.id === c.id ? [] : (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in').map(p => ({ id: `gin|${g.id}|${p.id}`, label: `${g.id} · ${this.compDef(g.type)?.name ?? g.type} (in ${p.id.slice(2)})` }))),
       ];
-      const srcInto = port => v.wires.find(w => w.to.componentId === c.id && w.to.port === port)?.from.componentId ?? '';
+      const srcInto = port => { const w = v.wires.find(x => x.to.componentId === c.id && x.to.port === port); return w ? `${w.from.componentId}|${w.from.port}` : ''; };
       const dstOfOut = port => { const w = v.wires.find(w => w.from.componentId === c.id && w.from.port === port); return w ? (w.to.port === 'drive' ? `act|${w.to.componentId}` : `gin|${w.to.componentId}|${w.to.port}`) : ''; };
       const opt = (list, cur) => '<option value="">— none —</option>' + list.map(o => `<option value="${o.id}"${o.id === cur ? ' selected' : ''}>${o.label}</option>`).join('');
       html += `<div class="conn" data-ins="${inPorts.length}" data-outs="${outPorts.length}">` +
         inPorts.map(p => `<label>In <select id="conn-in-${p.id}">${opt(srcOpts, srcInto(p.id))}</select></label>`).join('') +
         outPorts.map(p => `<label>Out <select id="conn-out-${p.id}">${opt(dstOpts, dstOfOut(p.id))}</select></label>`).join('') +
+        (outPorts.length ? `<button type="button" id="ins-add-out">+ Add Output</button>` : '') +
         `</div>`;
     }
     if (this.compDef(c.type)?.category === 'sensor') {
@@ -483,6 +527,33 @@ export class VehicleEditor {
       html += `<label>Max converted <input type="number" id="ins-prop-max" min="0" step="1" value="${mc}" placeholder="all"></label>`;
       html += `<div class="hint">copies this whole vehicle onto any nearby robot within trigger distance &mdash; the target becomes a clone and spreads onward</div>`;
     }
+    if (isNeuron(c.type)) {
+      const np = c.props ?? {};
+      const shape = TRANSFER_PRESETS.includes(np.shape) ? np.shape : 'bell';
+      html += `<label>Response <select id="ins-nshape">` +
+        TRANSFER_PRESETS.map(s => `<option value="${s}"${s === shape ? ' selected' : ''}>${s}</option>`).join('') + `</select></label>`;
+      if (shape !== 'custom') {
+        const th = np.threshold ?? 0.5;
+        html += `<label>Peak <input type="range" id="ins-nthresh" min="0" max="1" step="0.01" value="${th}"><span>${th.toFixed(2)}</span></label>`;
+        if (shape === 'bell') {
+          const sg = np.sigma ?? 0.35;
+          html += `<label>Width <input type="range" id="ins-nwidth" min="0.1" max="0.8" step="0.05" value="${sg}"><span>${sg.toFixed(2)}</span></label>`;
+        }
+      } else {
+        html += `<div id="neuron-spline" style="position:relative; border:1px solid var(--line); background:#0c0f14; margin:6px 0"></div>
+          <button type="button" id="ins-naddnode">+ Node</button> <button type="button" id="ins-nrmnode">- Node</button>
+          <div class="hint">drag points to shape the response (x = input, y = output)</div>`;
+      }
+    }
+    // Logic gates & neurons can be rotated/mirrored so their outputs face away
+    // from the robot's front, reducing wire crossings (see rotateVec/gateAnchor).
+    if (this.compDef(c.type)?.category === 'logic') {
+      const rot = c.rot ?? 0;
+      html += `<label>Orientation <select id="ins-rot">` +
+        [0, 90, 180, 270].map(r => `<option value="${r}"${r === rot ? ' selected' : ''}>${r === 0 ? 'default' : r + '\u00b0'}</option>`).join('') +
+        `</select></label>
+        <div class="hint">rotate/mirror so outputs face away from the robot's front and wires stop crossing</div>`;
+    }
     const cat = this.compDef(c.type)?.category;
     if (cat === 'sensor' || cat === 'actuator') {
       const opts = cat === 'sensor'
@@ -504,6 +575,7 @@ export class VehicleEditor {
     box.querySelector('#ins-fov')?.addEventListener('change', e => { c.props.fov = (Math.min(360, Math.max(0, Number(e.target.value) || 0))) * Math.PI / 180; this.refresh(); });
     box.querySelector('#ins-thresh')?.addEventListener('change', e => { c.props.threshold = Math.max(0.001, Number(e.target.value) || 0.001); this.refresh(); });
     box.querySelector('#ins-pol')?.addEventListener('change', e => { c.polarity = e.target.value; this.refresh(); });
+    box.querySelector('#ins-rot')?.addEventListener('change', e => { c.rot = Number(e.target.value); this.refresh(); });
     box.querySelector('#ins-prop-th')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.threshold = Math.max(1, Number(e.target.value) || 260); this.refresh(); });
     box.querySelector('#ins-prop-cool')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.cooldownTicks = Math.max(0, Math.round(Number(e.target.value) || 0)); this.refresh(); });
     box.querySelector('#ins-prop-max')?.addEventListener('change', e => { c.props = c.props ?? {}; const n = Number(e.target.value); c.props.maxConverted = (e.target.value === '' || Number.isNaN(n)) ? null : Math.max(0, Math.round(n)); this.refresh(); });
@@ -516,11 +588,11 @@ export class VehicleEditor {
       pdef.filter(p => p.kind === 'actuator_input' || p.kind === 'logic_in').forEach(p => {
         box.querySelector('#conn-in-' + p.id)?.addEventListener('change', e => {
           v.wires = v.wires.filter(w => !(w.to.componentId === c.id && w.to.port === p.id));
-          if (e.target.value) v.wires.push({ id: wireId(), from: { componentId: e.target.value, port: 'out' }, to: { componentId: c.id, port: p.id }, weight: 1 });
+          if (e.target.value) { const [cid, pid] = e.target.value.split('|'); v.wires.push({ id: wireId(), from: { componentId: cid, port: pid ?? 'out' }, to: { componentId: c.id, port: p.id }, weight: 1 }); }
           this.refresh();
         });
       });
-      pdef.filter(p => p.kind === 'sensor_output' || p.kind === 'logic_out').forEach(p => {
+      outputPorts(c, def).forEach(p => {
         box.querySelector('#conn-out-' + p.id)?.addEventListener('change', e => {
           v.wires = v.wires.filter(w => !(w.from.componentId === c.id && w.from.port === p.id));
           if (e.target.value) {
@@ -531,7 +603,15 @@ export class VehicleEditor {
           this.refresh();
         });
       });
+      // "Add Output": grow this source's tap list (multi-output, §4.2). The base
+      // tap(s) come from the def; added ones get ids out1, out2, ...
+      box.querySelector('#ins-add-out')?.addEventListener('click', () => {
+        const ids = outputPortIds(c, def);
+        c.outputs = [...ids, `out${ids.length}`];
+        this.refresh();
+      });
     }
+    if (isNeuron(c.type)) this.setupNeuronInspector(box, c);
     const mpEl = box.querySelector('#ins-mp');
     if (mpEl) {
       mpEl.addEventListener('input', e => { c.props.motorPower = Number(e.target.value); box.querySelector('#ins-mp-v').textContent = (+e.target.value).toFixed(2); });
@@ -549,6 +629,100 @@ export class VehicleEditor {
     box.querySelectorAll('.color-palette .swatch').forEach(btn => {
       btn.addEventListener('click', () => { v.body.color = btn.dataset.color; this.refresh(); });
     });
+  }
+
+  // Neuron inspector bindings: shape selector, bell/threshold sliders, and the
+  // interactive custom spline editor (§4.3). Runs right after renderInspector
+  // has set innerHTML, so the #neuron-spline container is live.
+  setupNeuronInspector(box, c) {
+    // A freshly placed neuron has no props; bind edits to the instance itself so
+    // they persist across refresh() (a detached {} object would be lost).
+    if (!c.props || typeof c.props !== 'object') c.props = {};
+    const p = c.props;
+    const onChange = () => this.refresh();
+    box.querySelector('#ins-nshape')?.addEventListener('change', e => { p.shape = e.target.value; delete p.spline; onChange(); });
+    box.querySelector('#ins-nthresh')?.addEventListener('input', e => { p.threshold = +e.target.value; e.target.nextElementSibling.textContent = (+e.target.value).toFixed(2); });
+    box.querySelector('#ins-nwidth')?.addEventListener('input', e => { p.sigma = +e.target.value; e.target.nextElementSibling.textContent = (+e.target.value).toFixed(2); });
+    this.setupSplineEditor(box, p);
+  }
+
+  // A tiny draggable point list for a transfer function. Points have x in [0,1]
+  // (input) and y in [0,1] (output); the plot shows the piecewise-linear curve.
+  setupSplineEditor(box, p) {
+    const el = box.querySelector('#neuron-spline');
+    if (!el) return;
+    const W = el.clientWidth || 300, H = 150, PAD = 14;
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    el.innerHTML = ''; el.appendChild(svg);
+    // input 0 at the LEFT, input 1 at the RIGHT (matches toLocalPt and the on-node
+    // curve glyph); output 0 at the bottom, 1 at the top.
+    const X = x => PAD + x * (W - 2 * PAD);
+    const Y = y => H - PAD - y * (H - 2 * PAD);
+    const toLocalPt = e => {
+      const r = svg.getBoundingClientRect();
+      const x = (e.clientX - r.left - PAD) / (W - 2 * PAD);
+      const y = (H - PAD - (e.clientY - r.top)) / (H - 2 * PAD);
+      return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+    };
+    const dragPoint = (i, endpoint) => e => {
+      e.preventDefault(); e.stopPropagation();
+      const nx = endpoint ? p.spline[i].x : null;   // endpoints anchor the input domain
+      const move = ev => {
+        const q = toLocalPt(ev);
+        let px;
+        if (endpoint) px = nx;                              // vertical only
+        else {                                              // keep x between neighbours (no order flips)
+          const lo = p.spline[i - 1].x, hi = p.spline[i + 1].x;
+          px = Math.max(lo, Math.min(hi, q.x));
+        }
+        p.spline[i] = { x: +px.toFixed(3), y: +q.y.toFixed(3) };
+        render();
+      };
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); this.refresh(); };
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    };
+    const render = () => {
+      svg.innerHTML = '';
+      // horizontal reference lines at 25 / 50 / 75 % of peak (output) level.
+      [0.25, 0.5, 0.75].forEach(frac => {
+        const ln = document.createElementNS(svgNS, 'line');
+        ln.setAttribute('x1', PAD); ln.setAttribute('x2', W - PAD);
+        ln.setAttribute('y1', Y(frac)); ln.setAttribute('y2', Y(frac));
+        ln.setAttribute('stroke', frac === 0.5 ? '#3a4658' : '#232c39');
+        ln.setAttribute('stroke-width', '1');
+        svg.appendChild(ln);
+      });
+      const pts = normalizeSpline(p.spline);
+      const path = document.createElementNS(svgNS, 'polyline');
+      path.setAttribute('points', pts.map(q => `${X(q.x)},${Y(q.y)}`).join(' '));
+      path.setAttribute('fill', 'none'); path.setAttribute('stroke', '#7fd1ff'); path.setAttribute('stroke-width', '2');
+      svg.appendChild(path);
+      for (let i = 0; i < pts.length; i++) {
+        const c = document.createElementNS(svgNS, 'circle');
+        c.setAttribute('cx', X(pts[i].x)); c.setAttribute('cy', Y(pts[i].y)); c.setAttribute('r', 6);
+        c.setAttribute('fill', '#ffd166'); c.style.cursor = 'grab';
+        const endpoint = i === 0 || i === pts.length - 1;
+        c.addEventListener('pointerdown', dragPoint(i, endpoint));
+        svg.appendChild(c);
+      }
+    };
+    box.querySelector('#ins-naddnode')?.addEventListener('click', () => {
+      const s = normalizeSpline(p.spline);
+      const xs = s.map(q => q.x); let gap = -1, gi = 0;
+      for (let i = 1; i < xs.length; i++) if (xs[i] - xs[i - 1] > gap) { gap = xs[i] - xs[i - 1]; gi = i; }
+      const mx = +((xs[gi - 1] + xs[gi]) / 2).toFixed(3);
+      p.spline = [...s, { x: mx, y: 0.5 }].sort((a, b) => a.x - b.x); render(); this.refresh();
+    });
+    box.querySelector('#ins-nrmnode')?.addEventListener('click', () => {
+      const s = normalizeSpline(p.spline); if (s.length <= 2) return;
+      let bi = 1, bd = -1;
+      for (let i = 1; i < s.length - 1; i++) { const dy = Math.abs(s[i].y - (s[i - 1].y + s[i + 1].y) / 2); if (dy > bd) { bd = dy; bi = i; } }
+      p.spline = s.filter((_, i) => i !== bi); render(); this.refresh();
+    });
+    if (!Array.isArray(p.spline) || p.spline.length < 2) p.spline = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
+    render();
   }
 
   // ---------- drawing ----------
@@ -622,19 +796,28 @@ export class VehicleEditor {
       const label = this.compDef(g.type)?.name ?? g.type;
       ctx.save();
       ctx.translate(g.pos.x, g.pos.y);
+      // g.rot orients the node (0/90/180/270); everything below is drawn in the
+      // rotated frame so box, curve glyph and stubs all turn together.
+      const rot = ((g.rot ?? 0) * Math.PI) / 180;
+      ctx.rotate(rot);
       ctx.font = '7px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const { w, h } = this.gateBox();
-      // input stubs (left) — one per input port; output stub (right)
+      // input stubs (left) + one output stub per tap (right) — both use rowY so
+      // the drawn stubs line up exactly with the wire anchors (gateAnchor).
       const inPorts = (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in');
+      const outIds = outputPortIds(g, this.compDef(g.type));
       ctx.strokeStyle = '#7a5b12';
       ctx.lineWidth = 1;
       inPorts.forEach((p, i) => {
-        const y = inPorts.length <= 1 ? 0 : -h / 4 + i * (h / 2);
+        const y = this.rowY(i, inPorts.length, h);
         ctx.beginPath(); ctx.moveTo(-w / 2 - 5, y); ctx.lineTo(-w / 2, y); ctx.stroke();
       });
-      ctx.beginPath(); ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2 + 5, 0); ctx.stroke();
+      outIds.forEach((id, i) => {
+        const y = this.rowY(i, outIds.length, h);
+        ctx.beginPath(); ctx.moveTo(w / 2, y); ctx.lineTo(w / 2 + 5, y); ctx.stroke();
+      });
       const neuron = isNeuron(g.type);
       // Neurons are tinted teal (analog) vs the amber of boolean gates; a live
       // curve glyph inside shows the chosen response shape at a glance.
@@ -644,8 +827,14 @@ export class VehicleEditor {
       ctx.fillRect(-w / 2, -h / 2, w, h);
       ctx.strokeRect(-w / 2, -h / 2, w, h);
       if (neuron) this.drawNeuronCurve(ctx, g, w, h);
+      // The label rotates WITH the box so it reads along the flow direction at
+      // 90/270; only at 180 would that leave it upside down, so there we undo the
+      // rotation and keep the text right side up.
+      const flip = (g.rot ?? 0) % 360 === 180;
+      if (flip) { ctx.save(); ctx.rotate(-rot); }
       ctx.fillStyle = '#1a1a1a';
       ctx.fillText(label, 0, neuron ? h / 2 - 3 : 0);
+      if (flip) ctx.restore();
       ctx.restore();
     }
 
@@ -789,7 +978,7 @@ const GATE_LOGIC = {
 const gateLogicDesc = type => GATE_LOGIC[type] ?? '';
 
 import { generateSnapPoints } from '../src/models/snapPoints.js';
-import { validateWiring } from '../src/models/wiring.js';
+import { validateWiring, outputPorts, outputPortIds } from '../src/models/wiring.js';
 import { componentSize, componentHits, nearestSnapIndex } from '../src/models/hitTest.js';
-import { isNeuron, transferOutput } from '../src/simulation/transfer.js';
+import { isNeuron, transferOutput, normalizeSpline, TRANSFER_PRESETS } from '../src/simulation/transfer.js';
 import { colorPaletteHtml, lightenHex, DEFAULT_BODY_COLOR } from './color.js';
