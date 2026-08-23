@@ -174,6 +174,7 @@ export class CoopPanel {
   // ---- layout -------------------------------------------------------------
   /** Connected: swap Host/Join row for Disconnect, reveal code + deploy + fleet. Joiners lose the bottom sim controls; hosts keep them. */
   setConnectedLayout(on) {
+    this.ui.fields.hidden = on; // gateway URL + name only make sense for a fresh connection
     this.ui.row.hidden = on;
     this.ui.disconnect.hidden = !on;
     this.ui.code.hidden = !on;

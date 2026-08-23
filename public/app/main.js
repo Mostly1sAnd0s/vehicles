@@ -141,7 +141,7 @@ async function main() {
 
   // ---------- co-op sidebar panel (always in the DOM with the World page) ----------
   const coopPanel = new CoopPanel({
-    url: $('coop-gw-url'), name: $('coop-gw-name'), row: $('coop-gw-row'),
+    url: $('coop-gw-url'), name: $('coop-gw-name'), fields: $('coop-gw-fields'), row: $('coop-gw-row'),
     host: $('coop-host'), join: $('coop-join'), joinCode: $('coop-join-code'),
     disconnect: $('coop-disconnect'), code: $('coop-gw-code'), status: $('coop-gw-status'),
     deploy: $('coop-deploy'), editDesign: $('coop-edit'),

@@ -69,8 +69,10 @@
            code, or join an existing one — this client's bots are added to that shared world.
            The standalone Co-op tab was folded into the World sidebar. -->
       <h3>Co-op</h3>
-      <label>Gateway<input type="text" id="coop-gw-url" spellcheck="false" placeholder="ws://127.0.0.1:8090"></label>
-      <label>Name<input type="text" id="coop-gw-name" maxlength="24" placeholder="you"></label>
+      <div id="coop-gw-fields">
+        <label>Gateway<input type="text" id="coop-gw-url" spellcheck="false" placeholder="ws://127.0.0.1:8090"></label>
+        <label>Name<input type="text" id="coop-gw-name" maxlength="24" placeholder="you"></label>
+      </div>
       <div class="coop-gw-row" id="coop-gw-row">
         <button id="coop-host" title="Create a new shared world and show its join code">Host</button>
         <input type="text" id="coop-join-code" maxlength="6" spellcheck="false" placeholder="code">
