@@ -85,16 +85,20 @@ main { flex: 1; min-height: 0; display: flex; }
 #editor-inspector { border-right: none; border-left: 1px solid var(--line); }
 .side h3 { margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
 
-/* Co-op join form (M2): stacked labels, full-width inputs */
 .dim { color: var(--dim); }
-#coop-side .coop-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
-#coop-side .coop-row button { flex: 1; padding: 4px 2px; }
-#coop-side label.coop-fleet { flex-direction: row; justify-content: space-between; flex: 1; margin: 4px 0; }
-#coop-side #coop-fleet { width: 56px; }
-#coop-side label { flex-direction: column; align-items: stretch; gap: 3px; }
-#coop-side input[type="text"] { width: 100%; box-sizing: border-box; margin: 0; }
-#coop-status { min-height: 15px; margin: 8px 0; }
-#coop-deploy { margin-top: 6px; }
+/* Co-op sidebar section (M5): Host / Join row, big world code, live status line */
+#world-side .coop-gw-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+#world-side #coop-join-code { flex: 1; min-width: 0; width: 100%; box-sizing: border-box; text-transform: uppercase; font-family: monospace; letter-spacing: 2px; }
+#world-side .coop-code { font-family: monospace; font-size: 22px; letter-spacing: 6px; text-align: center; padding: 6px 0; margin: 4px 0; color: inherit; }
+#coop-gw-status { min-height: 15px; margin: 4px 0 8px; }
+
+/* Shared fleet list (M5 p3–4): one row per participant, admin gets −/+/✕ */
+.remote-fleet { margin: 4px 0; }
+.fleet-row { display: flex; align-items: center; gap: 4px; padding: 2px 0; font-size: 12px; }
+.fleet-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-count { font-size: 11px; }
+.fleet-btns { display: flex; gap: 2px; }
+.fleet-btns button { padding: 0 5px; line-height: 18px; }
 #palette button, #world-side > button { width: 100%; margin: 3px 0; text-align: left; }
 #palette button.placing { border-color: var(--accent); background: rgba(77,163,255,.15); }
 

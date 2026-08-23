@@ -386,6 +386,10 @@ export class WorldSim {
         // adopt the dropped pose as the seed so Reset restores it
         drag.inst.seed = { x: drag.inst.body.position.x, y: drag.inst.body.position.y, rotation: drag.inst.body.angle };
       }
+      // Co-op (M5 p3): a dropped element lands at its final pose — sync the move out once.
+      if (drag?.mode === 'element') {
+        this.hooks?.onElementChange?.({ op: 'move', id: drag.el.id, x: Math.round(drag.el.position.x), y: Math.round(drag.el.position.y) });
+      }
       drag = null;
     });
     this.canvas.addEventListener('wheel', e => {
@@ -463,6 +467,8 @@ export class WorldSim {
     this.selectedElement = el.id;
     this.buildObstacles();
     this.renderInspector();
+    // Co-op (M5 p3): the host's canvas is the shared world — mirror the add out to joiners.
+    this.hooks?.onElementChange?.({ op: 'add', element: el });
   }
 
   // Move a running vehicle to an explicit pose (used by the inspector) and adopt
@@ -658,7 +664,33 @@ export class WorldSim {
   renderInspector() { renderWorldInspector(this); }
 
   // ---------------- drawing ----------------
-  draw() { drawWorld(this); }
+  draw() {
+    drawWorld(this);
+    // Co-op (M5 p3): shared-world bots ride on top of the local render. The ctx transform is
+    // still world-space here (drawWorld leaves it that way), so we can draw straight in world coords.
+    if (!this.hooks?.remoteBots) return;
+    const bots = this.hooks.remoteBots();
+    if (!bots?.length) return;
+    const ctx = this.canvas.getContext('2d');
+    const hues = [4, 130, 205, 285, 45, 320];
+    bots.forEach((b, i) => {
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.angle ?? 0);
+      ctx.globalAlpha = b.mine ? 1 : 0.85;
+      ctx.fillStyle = `hsl(${hues[i % hues.length]}, 70%, ${b.mine ? 62 : 46}%)`;
+      ctx.strokeStyle = 'rgba(255,255,255,.75)';
+      ctx.lineWidth = 1.5 / this.view.zoom;
+      ctx.beginPath();
+      ctx.rect(-(b.w ?? 80) / 2, -(b.h ?? 40) / 2, b.w ?? 80, b.h ?? 40);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#fff'; // heading notch at the front edge
+      ctx.fillRect((b.w ?? 80) / 2 - 8, -2, 8, 4);
+      ctx.restore();
+    });
+    ctx.globalAlpha = 1;
+  }
 }
 
 function M_BodySetPosition(M, body, p) { M.Body.setPosition(body, p); }

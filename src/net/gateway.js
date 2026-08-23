@@ -69,7 +69,13 @@ export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0,
         } else if (msg?.type === 'join') {
           const code = String(msg.code ?? '').toUpperCase();
           const w = worlds.get(code);
-          if (!w) { socket.send(JSON.stringify({ type: 'error', error: `no such world: ${code || '(empty)'}` })); return; }
+          if (!w) {
+            // Refuse and hang up: leaving the socket open would leave it unbound (state still
+            // null) and any follow-up frame would fall through to the post-handshake path below.
+            socket.send(JSON.stringify({ type: 'error', error: `no such world: ${code || '(empty)'}` }));
+            socket.close();
+            return;
+          }
           const { token } = w.session.join({ name: msg.name, role: 'participant' });
           state = { code, token };
           bind(socket, w, token);
@@ -77,9 +83,11 @@ export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0,
           w.session.broadcast({ type: 'roster', clients: rosterOf(w) });
         } else {
           socket.send(JSON.stringify({ type: 'error', error: `first message must be "host" or "join" (got ${msg?.type})` }));
+          socket.close(); // don't keep a socket we never bound to a world
         }
         return;
       }
+      if (!state) return; // handshake was refused above; never route to a session
       const w = worlds.get(state.code);
       if (!w) return; // world was GC'd under us; drop further input
       w.session.handle(state.token, msg); // acks + broadcasts happen inside Session

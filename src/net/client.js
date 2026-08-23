@@ -26,6 +26,9 @@ export class CoopClient {
     this.ws = null;
     this.url = null;
     this.you = null;        // {name, role, protoId} from the welcome message
+    this.code = null;       // 6-char world code (gateway handshake; null on the single-world server)
+    this.mode = null;       // 'host' | 'join' — how this client entered the shared world
+    this.clients = [];      // live roster [{name, role, protoId}] from gateway `roster` messages
     this.elements = [];     // static world elements (lights/obstacles) from the welcome message
     this.bots = [];         // latest snapshot's bots (normalized)
     this.tick = 0;          // server world tick of the last snapshot/welcome (advances while running)
@@ -42,11 +45,20 @@ export class CoopClient {
 
   /**
    * Open the socket and join. Resolves with the `welcome` message once the server has assigned an
-   * identity (`you`) and sent the current world; rejects on timeout, connection error, or close
-   * before the welcome arrives.
+   * identity (`you`) and sent the current world; rejects on timeout, connection error, a server
+   * `error` before the welcome (e.g. joining an unknown code), or close before the welcome arrives.
+   *
+   * `opts` selects the handshake:
+   *   - `{mode:'host', name}`  → gateway: create a fresh world (client becomes its admin); the
+   *     welcome carries the new world's 6-char `code`.
+   *   - `{mode:'join', code, name}` → gateway: enter an existing world by code (participant).
+   *   - omitted                → legacy single-world server: `{type:'join', name}`.
    */
-  connect(url, name) {
+  connect(url, name, opts = {}) {
     this.url = url;
+    this.mode = opts.mode ?? null;
+    this.code = null;
+    this.clients = [];
     this.status = 'connecting';
     this.lastError = null;
     return new Promise((resolve, reject) => {
@@ -59,13 +71,19 @@ export class CoopClient {
 
       const timer = setTimeout(() => { try { ws.close(); } catch {} fail('connection timed out'); }, 5000);
 
-      ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', name })); };
+      const first = opts.mode === 'host'
+        ? { type: 'host', name }
+        : opts.mode === 'join'
+          ? { type: 'join', name, code: String(opts.code ?? '') }
+          : { type: 'join', name };
+      ws.onopen = () => { ws.send(JSON.stringify(first)); };
       ws.onmessage = (ev) => {
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.type === 'welcome') {
           this.status = 'connected';
           this.you = msg.you ?? null;
+          this.code = msg.code ?? null;
           this.running = !!msg.running;
           this.elements = msg.world?.elements ?? [];
           this.bots = (msg.world?.bots ?? []).map(normalizeBot);
@@ -74,16 +92,23 @@ export class CoopClient {
         } else if (msg.type === 'snapshot') {
           this.bots = (msg.bots ?? []).map(normalizeBot);
           this.tick = msg.t ?? this.tick;
+        } else if (msg.type === 'elements') {
+          // Host edited the shared world (add/drag/delete); adopt the full list.
+          this.elements = msg.elements ?? [];
         } else if (msg.type === 'state') {
           this.running = !!msg.running;   // authoritative running flag echoed by start/pause/reset
+        } else if (msg.type === 'roster') {
+          this.clients = (msg.clients ?? []).map((c) => ({ name: c?.name, role: c?.role, protoId: c?.protoId ?? null }));
         } else if (msg.type === 'error') {
           this.lastError = msg.error ?? 'server error';
+          if (!settled) { try { ws.close(); } catch {} fail(this.lastError); } // handshake refused (unknown code, …)
         }
         this._emit(msg);
       };
       ws.onerror = () => fail('connection failed');
       ws.onclose = () => {
         clearTimeout(timer);
+        if (!settled) fail(this.lastError ?? 'server closed the connection'); // e.g. gateway hung up after an error
         if (this.status !== 'closed') this.status = 'closed';
         this._emit({ type: 'closed' });
       };
@@ -94,6 +119,10 @@ export class CoopClient {
   deploy(vehicle) { return this._send({ type: 'deploy', vehicle }); }
   setCount(protoId, n) { return this._send({ type: 'setCount', protoId, count: n }); }
   controls(command) { return this._send({ type: 'controls', command }); }
+  // Shared-world element edits (host-only on the server; participants get refusal errors).
+  addElement(element) { return this._send({ type: 'addElement', element }); }
+  moveElement(id, x, y) { return this._send({ type: 'moveElement', id, x, y }); }
+  removeElement(id) { return this._send({ type: 'removeElement', id }); }
 
   _send(msg) { if (this.ws && this.status === 'connected') this.ws.send(JSON.stringify(msg)); return this; }
 

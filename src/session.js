@@ -105,9 +105,12 @@ export class Session {
     if (!p) return { type: 'error', error: 'not joined' };
     let reply;
     switch (msg?.type) {
-      case 'deploy':   reply = this._deploy(p, msg); break;
-      case 'setCount': reply = this._setCount(p, msg); break;
-      case 'controls': reply = this._controls(p, msg); break;
+      case 'deploy':        reply = this._deploy(p, msg); break;
+      case 'setCount':      reply = this._setCount(p, msg); break;
+      case 'controls':      reply = this._controls(p, msg); break;
+      case 'addElement':    reply = this._addElement(p, msg); break;
+      case 'moveElement':   reply = this._moveElement(p, msg); break;
+      case 'removeElement': reply = this._removeElement(p, msg); break;
       default:         reply = { type: 'error', error: `unknown message type: ${msg?.type}` };
     }
     // Errors are private feedback to the actor; world-affecting successes already broadcast themselves.
@@ -159,6 +162,57 @@ export class Session {
 
   /** Stamp the human owner onto a proto's clones (first-deploy & admin-grown ones start untagged). */
   _tagOwner(protoId, name) { for (const inst of this.world.instancesFor(protoId)) if (inst.owner == null) inst.owner = name; }
+
+  // ---- shared-world elements (PLAN.md §Multi-User, M5 phase 3) ---------------
+  /**
+   * The HOST's World canvas is the source of truth for static elements. These admin-only commands
+   * mirror an add / drag-drop / delete out so every joiner renders the same world; each success
+   * broadcasts the FULL element list (coarse, but the list is small and changes are rare) as
+   * `{type:'elements', elements}` — the welcome message carries the same field for fresh joiners.
+   */
+  _sharedElements() { return (this.world.worldDoc.elements ??= []); }
+
+  _addElement(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'only the host edits shared elements' };
+    const e = msg?.element;
+    // Number.isFinite, NOT truthiness: a light dropped at the canvas centre is {x:0, y:0}.
+    if (!e || !e.type || !Number.isFinite(Number(e.position?.x)) || !Number.isFinite(Number(e.position?.y)))
+      return { type: 'error', error: 'addElement requires element:{type,position}' };
+    const el = {
+      id: String(e.id ?? `el_${Date.now().toString(36)}`),
+      type: e.type, primitive: e.primitive ?? (e.type === 'obstacle' ? 'rect' : 'circle'),
+      position: { x: Math.round(Number(e.position.x)), y: Math.round(Number(e.position.y)) },
+      rotation: Number(e.rotation) || 0, scale: e.scale ?? { x: 1, y: 1 }, properties: e.properties ?? {},
+    };
+    this._sharedElements().push(el);
+    const res = { type: 'elementAdded', id: el.id, count: this._sharedElements().length };
+    this._sendTo(p.token, res); // ack so the host learns the assigned id (handle() only echoes errors)
+    this.broadcast({ type: 'elements', elements: this._sharedElements() }); // everyone (incl. sender; admin UI ignores its own echo)
+    return res;
+  }
+
+  _moveElement(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'only the host edits shared elements' };
+    const el = this._sharedElements().find(x => x.id === msg?.id);
+    if (!el) return { type: 'error', error: `no such element: ${msg?.id}` };
+    el.position.x = Math.round(Number(msg?.x)); el.position.y = Math.round(Number(msg?.y));
+    const res = { type: 'elementMoved', id: el.id, x: el.position.x, y: el.position.y };
+    this._sendTo(p.token, res);
+    this.broadcast({ type: 'elements', elements: this._sharedElements() });
+    return res;
+  }
+
+  _removeElement(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'only the host edits shared elements' };
+    const els = this._sharedElements();
+    const i = els.findIndex(x => x.id === msg?.id);
+    if (i < 0) return { type: 'error', error: `no such element: ${msg?.id}` };
+    els.splice(i, 1);
+    const res = { type: 'elementRemoved', id: msg.id, count: els.length };
+    this._sendTo(p.token, res);
+    this.broadcast({ type: 'elements', elements: els });
+    return res;
+  }
 
   // ---- stepping / snapshotting ------------------------------------------
   _wireBots() { return this.world.snapshot().bots.map(roundBot); }

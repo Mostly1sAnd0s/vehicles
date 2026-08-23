@@ -5,7 +5,7 @@
 
 import { VehicleEditor } from './editor.js';
 import { WorldSim } from './world.js';
-import { CoopWorld } from './coop.js';
+import { CoopPanel } from './coopPanel.js';
 import { blankVehicle } from './prototypes.js';
 
 const $ = id => document.getElementById(id);
@@ -44,43 +44,31 @@ async function main() {
     })
   );
 
-  // ---------- tabs ----------
+  // ---------- tabs (editor / world) ----------
+  // Co-op is no longer a tab: it lives in the World sidebar (coopPanel below), so the
+  // standalone panel + its top-bar chrome are gone.
   const tabEditor = $('tab-editor');
   const tabWorld = $('tab-world');
-  const tabCoop = $('tab-coop');
   let worldSim = null;
-  let coop = null;
 
   function activate(name) {
     const isWorld = name === 'world';
-    const isCoop = name === 'coop';
-    // active tab button + panel (N-tab safe).
-    tabEditor.classList.toggle('active', !isWorld && !isCoop);
+    // active tab button + panel.
+    tabEditor.classList.toggle('active', !isWorld);
     tabWorld.classList.toggle('active', isWorld);
-    tabCoop.classList.toggle('active', isCoop);
-    $('panel-editor').classList.toggle('active', !isWorld && !isCoop);
+    $('panel-editor').classList.toggle('active', !isWorld);
     $('panel-world').classList.toggle('active', isWorld);
-    $('panel-coop').classList.toggle('active', isCoop);
     // Contextual top-bar chrome:
     //  - the "Vehicle Editor" button is gone (reached via a vehicle's Edit control);
     //  - "Done" (was "World") appears only while editing a vehicle;
     //  - each page shows only its own load/save pair (the world buttons don't
     //    operate on the editor's in-progress vehicle, and vice-versa).
     tabEditor.hidden = true;
-    if (isCoop) {
-      // Co-op is a standalone shared-world view: no local editing chrome.
-      tabWorld.hidden = true;
-      $('import-vehicle').hidden = true;
-      $('export-vehicle').hidden = true;
-      $('import-world').hidden = true;
-      $('export-world').hidden = true;
-    } else {
-      tabWorld.hidden = isWorld;
-      $('import-vehicle').hidden = isWorld;
-      $('export-vehicle').hidden = isWorld;
-      $('import-world').hidden = !isWorld;
-      $('export-world').hidden = !isWorld;
-    }
+    tabWorld.hidden = isWorld;
+    $('import-vehicle').hidden = isWorld;
+    $('export-vehicle').hidden = isWorld;
+    $('import-world').hidden = !isWorld;
+    $('export-world').hidden = !isWorld;
   }
 
   const editor = new VehicleEditor($('editor-canvas'), {
@@ -126,26 +114,53 @@ async function main() {
         editor.refresh();
         activate('editor');
       },
-    });
-  }
-
-  function initCoop() {
-    if (coop) return coop;
-    coop = new CoopWorld($('coop-canvas'), {
-      ui: {
-        name: $('coop-name'), url: $('coop-url'), connect: $('coop-connect'), status: $('coop-status'), deploy: $('coop-deploy'),
-        start: $('coop-start'), pause: $('coop-pause'), reset: $('coop-reset'),
-        fleet: $('coop-fleet'), fleetSet: $('coop-fleet-set'), perm: $('coop-perm'),
+      // Co-op (M5 p3): the host's add/drag of elements syncs out to the shared world.
+      onElementChange: (info) => {
+        const c = coopPanel.client;
+        if (c.status !== 'connected' || c.you?.role !== 'admin') return; // single-player or read-only
+        if (info.op === 'add') c.addElement(info.element);
+        else if (info.op === 'move') c.moveElement(info.id, info.x, info.y);
       },
-      getVehicle: () => state.vehicle,
+      // Co-op (M5 p3): shared-world bots render on top of the local world (both roles).
+      remoteBots: () => {
+        const c = coopPanel.client;
+        if (c.status !== 'connected') return [];
+        const me = c.you?.name;
+        return c.bots.map((b) => ({ ...b, mine: b.owner === me }));
+      },
     });
-    return coop;
   }
 
   tabEditor.onclick = () => activate('editor');
   tabWorld.onclick = () => { activate('world'); initWorldSim(); };
-  tabCoop.onclick = () => { activate('coop'); initCoop(); };
   activate('editor'); // sync the top bar to the default (editor) view
+
+  // ---------- co-op sidebar panel (always in the DOM with the World page) ----------
+  const coopPanel = new CoopPanel({
+    url: $('coop-gw-url'), name: $('coop-gw-name'), row: $('coop-gw-row'),
+    host: $('coop-host'), join: $('coop-join'), joinCode: $('coop-join-code'),
+    disconnect: $('coop-disconnect'), code: $('coop-gw-code'), status: $('coop-gw-status'),
+    deploy: $('coop-deploy'), controls: $('coop-controls'),
+    start: $('coop-start'), pause: $('coop-pause'), reset: $('coop-reset'),
+    remoteFleet: $('remote-fleet'),
+  }, { getVehicle: () => state.vehicle });
+
+  // App-level co-op binding (M5 p3): the World canvas IS the shared world.
+  const addElementBtns = [ $('add-light'), $('add-rock'), $('add-wall') ];
+  coopPanel.client.onMessage((msg) => {
+    const c = coopPanel.client;
+    if (msg.type === 'welcome') {
+      // The host edits elements on the canvas; participants get a mirrored read-only world.
+      const isHost = c.you?.role === 'admin';
+      for (const b of addElementBtns) b.disabled = !isHost;
+    } else if (msg.type === 'elements' && c.status === 'connected' && c.you?.role !== 'admin') {
+      // Mirror the host's edit: replace the local static elements and rebuild obstacle bodies.
+      state.world.elements = clone(msg.elements ?? []);
+      worldSim?.buildObstacles();
+    } else if (msg.type === 'closed') {
+      for (const b of addElementBtns) b.disabled = false; // back to single-player editing
+    }
+  });
 
   // simplify propagation: only track owner prototype after Edit
   const _onVehicleChanged = editor.hooks.onVehicleChanged;
@@ -247,7 +262,7 @@ async function main() {
   } catch { /* version file optional until a build has run; keep the static title */ }
 
   // debug/test handle (used by headless smoke tests)
-  window.__app = () => ({ state, get worldSim() { return worldSim; }, get editor() { return editor; }, get coop() { return coop; } });
+  window.__app = () => ({ state, get worldSim() { return worldSim; }, get editor() { return editor; }, get coopPanel() { return coopPanel; } });
 }
 
 function clone(x) { return JSON.parse(JSON.stringify(x)); }

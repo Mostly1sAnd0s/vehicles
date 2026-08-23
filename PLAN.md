@@ -456,7 +456,7 @@ Implementation sketch:
 - On-body readouts (Values toggle) show x/y, per-sensor level→output + distance-to-light,
   per-wheel signed force. Light beam = true sensing radius only (ghost-range fallback removed).
 
-## Multi-User / Co-op (planned → building)
+## Multi-User / Co-op (implemented — current model is M5)
 
 ### Goal & confirmed decisions
 Many participants share **one world** and watch their own bot(s) interact with everyone
@@ -518,6 +518,15 @@ positions/sensor readings at ~10–20 Hz.
   - `{type:'snapshot', t, bots:[{id,protoId,owner,x,y,angle,vx,vy}]}` at ~15 Hz to everyone (bots rounded on the wire).
   - Errors (`{type:'error', error}`) are echoed to the offending actor only.
 - **Enforcement:** deploy is owner-only by construction (no protoId in the message — a participant can only push their own bot); `setCount`/controls require `role==='admin'`. Rejections are sent back as `{type:'error'}`. The first joiner (no role given) becomes the admin who runs the session.
+
+> **Superseded by M5.** The M0–M4 plan below describes the first co-op build: one session per
+> process (`npm run serve:coop`), “first joiner becomes admin”, and a standalone Co-op tab with a
+> read-only shared-world view. All of it shipped and remains the single-world foundation
+> (`src/session.js` + `src/net/server.js`, still runnable via `npm run serve:coop:single`), but the
+> **browser-facing co-op UX was replaced by M5** (see the end of this section): one always-on
+> gateway hosting many 6-char-coded worlds, the Co-op controls in the World sidebar, and the World
+> canvas *is* the shared world. Where the two conflict, M5 wins — notably “host = per-world admin”
+> replaces “first joiner is admin”, and deploy + element sync replace the read-only view.
 
 ### Phases (each shippable + tested on its own)
 - **M0 — Headless shared world sim.** Extract the per-step loop from `world.js` into
@@ -615,8 +624,49 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   server kept as `serve:coop:single`). `tests/multiplayer.gateway.test.js` e2e over real sockets:
   host→code, join by code, wrong-code refused, roster on both, per-host world isolation, prune+GC.
   Full unit suite **232/232**, no hangs.
-- [ ] **Phase 2 — CO-OP pane in the World sidebar.** Host button (→ code + server IP + client count)
-  and a Join button + code box (→ becomes Disconnect when connected). Remove the standalone Co-op tab.
-- [ ] **Phase 3 — bind host's world to the shared world.** host add/drag/run syncs out to joiners;
-  remote vehicles appear in the host's Vehicles list.
-- [ ] **Phase 4 — host list management.** add/remove (not edit) other participants' vehicles.
+- [x] **Phase 2 — CO-OP pane in the World sidebar.** `#world-side` gains a Co-op section under
+  Vehicles: **Host** → `{type:'host'}` reveals the 6-char code big and tracks the live client count
+  (roster) next to the gateway address; **Join** + code box (Enter works, auto-uppercased) →
+  `{type:'join',code}`; while connected the row swaps for a single **Disconnect** that closes the
+  socket (server prunes this client's bots). Gateway address + display name persist in localStorage.
+  The standalone Co-op tab, `panel-coop`, its top-bar chrome, and `public/app/coop.js` are removed;
+  `main.js` is back to two tabs and exposes `__app().coopPanel`. **Client:** `CoopClient.connect(url,
+  name, {mode:'host'|'join', code})` drives the gateway handshake (legacy single-world join still
+  works), keeps `code`/`clients`, and now REJECTS on a pre-welcome server error or close — so a dead
+  join code surfaces in the status line instead of hanging. **Bug fixed:** the gateway left refused
+  handshakes (unknown code, bad first message) as unbound open sockets whose next frame would crash
+  on `state.code`; it now sends the error and hangs up, and the post-handshake path guards `!state`.
+  `tests/multiplayer.gateway.test.js` adds refusal-hang-up + a `CoopClient` host/join e2e;
+  `tests/smoke/coop.panel.mjs` is a real-browser probe (SPA ↔ in-process gateway over CDP): host →
+  code + layout swap + client count, disconnect → layout back + server prune/GC, dead join refused
+  in the status line. It caught two UI-only bugs: Disconnect left disabled on the success path, and
+  a reused headless-Chrome profile serving stale JS from its HTTP cache (fresh profile per run now).
+- [x] **Phase 3 — bind host's world to the shared world.** The World canvas IS the shared world:
+  `WorldSim` gained two hooks — `onElementChange({op:'add'|'move',…})` (fired by the +Light/+Rock/
+  +Wall buttons and at the end of an element drag) and `remoteBots()` (drawn on top of the local
+  render each frame, world-space, one hue per participant, own bots highlighted). main.js wires
+  them to the panel client **only when connected as admin**: adds/moves go out as
+  `{type:'addElement'|'moveElement'}`; participants instead mirror — an `elements` message replaces
+  their local static elements + rebuilds obstacle bodies, and the element-add buttons are disabled
+  for them (re-enabled on disconnect). **Server:** Session gained admin-only `addElement` /
+  `moveElement` / `removeElement` (each sends its ack AND broadcasts the full `{type:'elements',…}`
+  list; welcome already carries it for fresh joiners). **Bug fixed:** those handlers returned
+  success replies that `handle()` never transmits (it only echoes errors) — now `_sendTo`d like
+  `_deploy`; and `addElement` validated position with truthiness, which rejected a light dropped at
+  the canvas centre `{x:0,y:0}` — now `Number.isFinite`. **UI:** the panel gains **Deploy design**
+  (everyone; owner-only on the server) and host-only **▶/⏸/↺** session controls (Start/Pause track
+  the authoritative `state.running` echo), so the shared sim can actually be run.
+- [x] **Phase 4 — host list management.** `#remote-fleet` under Vehicles lists every participant's
+  prototype with its live bot count (roster × snapshot bots); the host gets **− / + / ✕** per row
+  mapping to `setCount(protoId, n±1 | 0)` — add/remove, never edit; participants see a read-only
+  roster. Server enforces admin-only as before. **Panel bug fixed:** the 15Hz `snapshot` stream was
+  re-running `renderStatus()` and clobbering event messages like “deployed…” in the status line —
+  the count now refreshes on `roster` only, snapshots redraw just the fleet.
+  `tests/multiplayer.gateway.test.js` covers add/move/remove mirroring, participant refusal, ack
+  ids, and post-remove welcome state; `tests/smoke/coop.panel.mjs` (now p2–p4) drives the real SPA:
+  host → deploy → fleet ±/✕ → light added from the World toolbar and moved through the hook, and a
+  Node-side observer's welcome must contain the light at its MOVED position plus the host's bot.
+  It caught three more: `#remote-fleet` missing from index.html (CoopPanel now fails fast naming
+  the missing element), the smoke's own click-every-poll tick racing the settled “deployed…”
+  status, and the truthiness-zero addElement refusal above. Full unit suite **232/232**, all
+  browser smokes green.

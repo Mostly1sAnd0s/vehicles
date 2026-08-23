@@ -10,11 +10,12 @@
     "serve": "npm run build && node scripts/serve.mjs",
     "serve:coop": "node scripts/serve-coop-gateway.mjs",
     "serve:coop:single": "node scripts/serve-session.mjs",
-    "smoke": "node tests/smoke/editor.ui.mjs && node tests/smoke/world.sim.mjs && node tests/smoke/proto.crud.mjs && node tests/smoke/neurons.outputs.mjs",
+    "smoke": "node tests/smoke/editor.ui.mjs && node tests/smoke/world.sim.mjs && node tests/smoke/proto.crud.mjs && node tests/smoke/neurons.outputs.mjs && node tests/smoke/coop.panel.mjs",
     "smoke:editor": "node tests/smoke/editor.ui.mjs",
     "smoke:world": "node tests/smoke/world.sim.mjs",
     "smoke:crud": "node tests/smoke/proto.crud.mjs",
-    "smoke:neurons": "node tests/smoke/neurons.outputs.mjs"
+    "smoke:neurons": "node tests/smoke/neurons.outputs.mjs",
+    "smoke:coop": "node tests/smoke/coop.panel.mjs"
   },
   "license": "MIT",
   "devDependencies": {
