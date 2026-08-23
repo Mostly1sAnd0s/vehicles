@@ -1,7 +1,6 @@
 /**
- * Co-op GATEWAY (PLAN.md §Multi-User, phase M5). Hosts MANY independent coded worlds on one port.
- *
- * Unlike `net/server.js` (one world per process), the gateway multiplexes a `Map<code, Session>`.
+ * Co-op GATEWAY (PLAN.md §Multi-User, M5) — the co-op transport. Hosts MANY independent coded
+ * worlds on one port: it multiplexes a `Map<code, Session>`.
  * A client's first message is either:
  *   → { type:'host', name }              create a fresh world; this client becomes its host (admin)
  *   ← { type:'welcome', code, running, you:{name,role,protoId}, world:{elements,bots} }

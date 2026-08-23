@@ -1,43 +1,44 @@
 /**
- * M2 e2e — the client core (`src/net/client.js`) against a real co-op server.
+ * M2/M3 e2e — the client core (`src/net/client.js`) against a real co-op GATEWAY (the only
+ * transport; the old single-world server was retired when M5 replaced it).
  *
- * Validates the participant-side of the loop over the wire: join → `welcome` (identity + static
- * elements), `deploy` → one's own bot appears in a shared `snapshot`, the stream is live (the
- * authoritative tick advances and the light-seeker moves), owner-only deploy, and admin setCount.
- * The client uses Node's built-in WebSocket (global in v26) — the same object the browser view
- * (`public/app/coop.js`) wraps, so this exercises exactly what ships to the page.
+ * Proves what the smoke test can't (browser only): the live client state machine — `you`,
+ * ownership isolation across deploys, the authoritative running flag, snapshot tick advancing,
+ * admin-only `setCount` refused over the wire for a participant, and reset restoring every bot to
+ * its spawn with zero velocity. The host adds the light through the client's own `addElement`
+ * (gateway worlds start empty), which also covers that command path end-to-end.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Matter from 'matter-js';
-import { createVehicleServer } from '../src/net/server.js';
-import { CoopClient } from '../src/net/client.js';
+import { createCoopGateway } from '../src/net/gateway.js';
+import CoopClient from '../src/net/client.js';
 
-test('M2 client: join → welcome (identity + elements), deploy → owned bot, live stream, owner/admin rules', async () => {
-  const configs = {
-    app: { defaults: { thrustScale: 2 } },
-    actuators: { powered_wheel: { maxForce: 1, powerCurve: 'linear', defaultPolarity: 'forward', defaultMotorPower: 1, defaultFriction: 0.5, frictionAirBase: 0.001, frictionAirScale: 0.2 } },
-    sensors: { light: { falloffPower: 2, minDistance: 5, defaultRange: 600, detectionThreshold: 0.02, fullScaleRatio: 16, fov: Math.PI * 2 } },
-    components: { components: [{ id: 'light_sensor', category: 'sensor', size: 8 }, { id: 'powered_wheel', category: 'actuator', size: 16 }] },
-  };
-  // Light sits ~40px ahead of the second spawn point so the light-seeker has something to chase.
-  const worldDoc = { elements: [{ type: 'light', position: { x: -200, y: 0 }, properties: { intensity: 200 } }], vehiclePrototypes: [] };
-  const srv = createVehicleServer({ Matter, configs, worldDoc });
-  const url = await srv.start();
+const configs = {
+  app: { defaults: { thrustScale: 2 } },
+  actuators: { powered_wheel: { maxForce: 1, powerCurve: 'linear', defaultPolarity: 'forward', defaultMotorPower: 1, defaultFriction: 0.5, frictionAirBase: 0.001, frictionAirScale: 0.2 } },
+  sensors: { light: { falloffPower: 2, minDistance: 5, defaultRange: 600, detectionThreshold: 0.02, fullScaleRatio: 16, fov: Math.PI * 2 } },
+  components: { components: [{ id: 'light_sensor', category: 'sensor', size: 8 }, { id: 'powered_wheel', category: 'actuator', size: 16 }] },
+};
 
+test('M2: client core against the gateway — join, deploy, live stream, admin-only setCount', async () => {
+  const gw = createCoopGateway({ Matter, configs });
+  const { url } = await gw.start();
   const alice = new CoopClient();
   const bob = new CoopClient();
 
   try {
-    // alice joins first → admin; welcome carries identity + the static light.
-    const wa = await alice.connect(url, 'alice');
+    // Host → admin; the world starts empty, so the host plants the light through the client.
+    await alice.connect(url, 'alice', { mode: 'host' });
     assert.equal(alice.status, 'connected');
     assert.equal(alice.you.role, 'admin');
-    assert.ok(Array.isArray(wa.world.elements) && alice.elements.some((e) => e.type === 'light'), 'welcome carried the light element');
+    alice.addElement({ type: 'light', position: { x: -200, y: 0 }, properties: { intensity: 200 } });
+    await waitFor(() => alice.elements.some((e) => e.type === 'light'), 1500, 'addElement to round-trip into client state');
 
-    await bob.connect(url, 'bob');
-    assert.equal(bob.you.role, 'participant', 'second joiner is a participant');
-    assert.equal(bob.you.protoId, 'p2');
+    // Joiner: welcome carries identity AND the host-planted light.
+    await bob.connect(url, 'bob', { mode: 'join', code: alice.code });
+    assert.equal(bob.you.role, 'participant', 'joiner is a participant');
+    assert.ok(bob.elements.some((e) => e.type === 'light'), 'welcome carried the light element');
 
     // Resizing the fleet is admin-only: participant bob is refused over the wire.
     let rej = null;
@@ -68,26 +69,21 @@ test('M2 client: join → welcome (identity + elements), deploy → owned bot, l
     assert.equal(bob.bots.length, 3);
   } finally {
     alice.close(); bob.close();
-    await srv.close();
+    await gw.close();
   }
 });
 
 test('M3: participant deploy (ownership isolation) + admin reset restores every bot to spawn', async () => {
-  const configs = {
-    app: { defaults: { thrustScale: 2 } },
-    actuators: { powered_wheel: { maxForce: 1, powerCurve: 'linear', defaultPolarity: 'forward', defaultMotorPower: 1, defaultFriction: 0.5, frictionAirBase: 0.001, frictionAirScale: 0.2 } },
-    sensors: { light: { falloffPower: 2, minDistance: 5, defaultRange: 600, detectionThreshold: 0.02, fullScaleRatio: 16, fov: Math.PI * 2 } },
-    components: { components: [{ id: 'light_sensor', category: 'sensor', size: 8 }, { id: 'powered_wheel', category: 'actuator', size: 16 }] },
-  };
-  // Light sits between the two spawn points (x=-360, x=-240) so BOTH light-seekers detect it
-  // and drive hard — making the "reset restored them" check non-vacuous.
-  const worldDoc = { elements: [{ type: 'light', position: { x: -300, y: 0 }, properties: { intensity: 200 } }], vehiclePrototypes: [] };
-  const srv = createVehicleServer({ Matter, configs, worldDoc });
-  const url = await srv.start();
+  const gw = createCoopGateway({ Matter, configs });
+  const { url } = await gw.start();
   const alice = new CoopClient(), bob = new CoopClient();
   try {
-    await alice.connect(url, 'alice'); // first joiner -> admin
-    await bob.connect(url, 'bob');      // participant
+    // Light sits between the two spawn points (x=-360, x=-240) so BOTH light-seekers detect it
+    // and drive hard — making the "reset restored them" check non-vacuous.
+    await alice.connect(url, 'alice', { mode: 'host' });
+    alice.addElement({ type: 'light', position: { x: -300, y: 0 }, properties: { intensity: 200 } });
+    await waitFor(() => alice.elements.some((e) => e.type === 'light'), 1500, 'host light to plant');
+    await bob.connect(url, 'bob', { mode: 'join', code: alice.code });
 
     // Both deploy their OWN design; the shared world holds two bots with distinct owners.
     alice.deploy(seekerDoc());
@@ -117,7 +113,7 @@ test('M3: participant deploy (ownership isolation) + admin reset restores every 
     );
   } finally {
     alice.close(); bob.close();
-    await srv.close();
+    await gw.close();
   }
 });
 

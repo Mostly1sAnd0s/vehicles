@@ -1,13 +1,15 @@
 /**
- * Co-op client core (PLAN.md §Multi-User, phase M2).
+ * Co-op client core (PLAN.md §Multi-User; M5 is the current model).
  *
  * A thin WebSocket wrapper around the session protocol that works in BOTH the browser and Node
- * (both expose a global `WebSocket`). It owns the connection + join handshake and maintains the
- * live state the shared-world view renders from (`you`, `elements`, `bots`, `running`, `status`).
- * The canvas layer (`public/app/coop.js`) is the only thing that touches pixels; everything testable
- * lives here, so `tests/multiplayer.client.test.js` can drive it against a real server with no browser.
+ * (both expose a global `WebSocket`). It owns the connection + host/join handshake and maintains
+ * the live state the UI renders from (`you`, `code`, `clients`, `elements`, `bots`, `running`).
+ * The sidebar panel (`public/app/coopPanel.js`) and the World-canvas overlay are the only things
+ * that touch pixels; everything testable lives here, so `tests/multiplayer.client.test.js` can
+ * drive it against a real gateway with no browser.
  *
- * Protocol (matches src/net/server.js): join → welcome → {snapshot | deployed | countSet | peerDeployed | error}.
+ * Protocol (matches src/net/gateway.js): host/join → welcome → {snapshot | roster | elements |
+ * deployed | countSet | peerDeployed | error}.
  */
 
 const num = (v, d = 0) => (Number.isFinite(v) ? v : d);
@@ -48,15 +50,17 @@ export class CoopClient {
    * identity (`you`) and sent the current world; rejects on timeout, connection error, a server
    * `error` before the welcome (e.g. joining an unknown code), or close before the welcome arrives.
    *
-   * `opts` selects the handshake:
-   *   - `{mode:'host', name}`  → gateway: create a fresh world (client becomes its admin); the
+   * `opts.mode` selects the gateway handshake (the only transport):
+   *   - `{mode:'host', name}`       → create a fresh world (client becomes its admin); the
    *     welcome carries the new world's 6-char `code`.
-   *   - `{mode:'join', code, name}` → gateway: enter an existing world by code (participant).
-   *   - omitted                → legacy single-world server: `{type:'join', name}`.
+   *   - `{mode:'join', code, name}` → enter an existing world by code (participant).
    */
   connect(url, name, opts = {}) {
+    if (opts.mode !== 'host' && opts.mode !== 'join') {
+      throw new TypeError(`CoopClient.connect: opts.mode must be 'host' or 'join' (got ${JSON.stringify(opts.mode ?? null)})`);
+    }
     this.url = url;
-    this.mode = opts.mode ?? null;
+    this.mode = opts.mode;
     this.code = null;
     this.clients = [];
     this.status = 'connecting';
@@ -73,9 +77,7 @@ export class CoopClient {
 
       const first = opts.mode === 'host'
         ? { type: 'host', name }
-        : opts.mode === 'join'
-          ? { type: 'join', name, code: String(opts.code ?? '') }
-          : { type: 'join', name };
+        : { type: 'join', name, code: String(opts.code ?? '') };
       ws.onopen = () => { ws.send(JSON.stringify(first)); };
       ws.onmessage = (ev) => {
         let msg;

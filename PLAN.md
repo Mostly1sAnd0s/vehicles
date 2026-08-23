@@ -521,12 +521,17 @@ positions/sensor readings at ~10–20 Hz.
 
 > **Superseded by M5.** The M0–M4 plan below describes the first co-op build: one session per
 > process (`npm run serve:coop`), “first joiner becomes admin”, and a standalone Co-op tab with a
-> read-only shared-world view. All of it shipped and remains the single-world foundation
-> (`src/session.js` + `src/net/server.js`, still runnable via `npm run serve:coop:single`), but the
-> **browser-facing co-op UX was replaced by M5** (see the end of this section): one always-on
+> read-only shared-world view. It shipped, but the **co-op UX was replaced by M5** (see the end of
+> this section): one always-on
 > gateway hosting many 6-char-coded worlds, the Co-op controls in the World sidebar, and the World
 > canvas *is* the shared world. Where the two conflict, M5 wins — notably “host = per-world admin”
 > replaces “first joiner is admin”, and deploy + element sync replace the read-only view.
+>
+> **Residue retired:** the transport-agnostic core (`src/session.js` + `HeadlessWorld`) remains —
+> the gateway drives it. The single-world transport (`src/net/server.js`, `scripts/serve-session.mjs`,
+> `npm run serve:coop:single`) and the implicit role fallback are **removed**; roles are explicit
+> (host → admin). M1’s session unit tests moved to `tests/session.test.js`; `multiplayer.client.test.js`
+> now runs `CoopClient` against the gateway.
 
 ### Phases (each shippable + tested on its own)
 - **M0 — Headless shared world sim.** Extract the per-step loop from `world.js` into
@@ -620,8 +625,7 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   `{type:'roster',clients}`; a leaving socket prunes its bots and an emptied world is GC'd. One
   step+broadcast loop iterates all worlds. `src/session.js` welcome now carries the world `code`.
   `scripts/serve-coop-gateway.mjs` = one-command launcher (`/health`, LAN hint). **Bug fixed:**
-  removed a duplicate `serve:coop` key in `package.json`; it now runs the gateway (old single-world
-  server kept as `serve:coop:single`). `tests/multiplayer.gateway.test.js` e2e over real sockets:
+  removed a duplicate `serve:coop` key in `package.json`; it now runs the gateway. `tests/multiplayer.gateway.test.js` e2e over real sockets:
   host→code, join by code, wrong-code refused, roster on both, per-host world isolation, prune+GC.
   Full unit suite **232/232**, no hangs.
 - [x] **Phase 2 — CO-OP pane in the World sidebar.** `#world-side` gains a Co-op section under

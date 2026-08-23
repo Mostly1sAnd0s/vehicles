@@ -1,15 +1,15 @@
 /**
- * Authoritative co-op session (PLAN.md §Multi-User, phase M1).
+ * Authoritative co-op session (PLAN.md §Multi-User; M5 is the current model).
  *
  * A Session owns one HeadlessWorld plus the participant registry and the permission model. It is
- * deliberately transport-agnostic: it never touches sockets. A thin WS layer (see net/server.js)
- * binds a sender to each token and feeds inbound messages through `handle()`. That split means the
- * whole session — join, deploy, ownership, admin-only controls, snapshotting — is unit-testable
- * with no network at all.
+ * deliberately transport-agnostic: it never touches sockets. The gateway (net/gateway.js) hosts
+ * many of them, one per 6-char world code, and binds a sender to each token. That split means the
+ * whole session — join, deploy, ownership, admin-only controls, element edits, snapshotting — is
+ * unit-testable with no network at all.
  *
- * Permission model (confirmed decisions in PLAN.md):
+ * Permission model (M5):
  *   - Identity: a display name + auto token per participant; no accounts.
- *   - First joiner (no explicit role) is the **admin** who runs the session.
+ *   - The client that HOSTS a world becomes its **admin** who runs the session.
  *   - **deploy** is owner-only, enforced by construction: a deploy message carries no protoId, so a
  *     participant can only ever push their own bot. The server also drops any malformed/unknown one.
  *   - **setCount** and **controls** (start/pause/reset) are admin-only.
@@ -58,14 +58,21 @@ export class Session {
 
   // ---- lifecycle ---------------------------------------------------------
   /**
-   * Create a participant and reserve their bot proto in the world. The first joiner becomes the
-   * admin (they run the session). No clone is spawned until they deploy — so the world starts clean.
+   * Create a participant and reserve their bot proto in the world. Role is explicit (M5): the
+   * gateway hosts the first client as 'admin', everyone else joins as 'participant'. No clone is
+   * spawned until they deploy — so the world starts clean.
    */
   join({ name, role } = {}) {
+    // The transport decides who runs a world (the gateway: host → admin, joiner → participant).
+    // There is deliberately NO "first joiner becomes admin" fallback — guessing a role here was
+    // the pre-M5 model and left two admins possible on a re-join after the first left.
+    if (role !== 'admin' && role !== 'participant') {
+      throw new TypeError(`Session.join: role must be 'admin' or 'participant' (got ${JSON.stringify(role ?? null)})`);
+    }
     const idx = this.participants.size;
     const token = `t${++this._seq}-${Math.random().toString(36).slice(2, 8)}`;
     const protoId = `p${++this._protoSeq}`;
-    const finalRole = role ?? (protoId === 'p1' ? 'admin' : 'participant');
+    const finalRole = role;
     const seed = { x: -360 + (idx % 6) * 120, y: ((idx / 6) | 0) * 90, rotation: 0 };
     const p = { token, name: String(name ?? `bot${idx + 1}`), role: finalRole, protoId, seed, deployed: false };
     this.participants.set(token, p);
@@ -94,7 +101,7 @@ export class Session {
       code: this.code, // set by the gateway (world code); omitted on the wire when undefined
       running: this.running,
       you: { name: p.name, role: p.role, protoId: p.protoId },
-      world: { elements: this.world.worldDoc.elements ?? [], bots: this._wireBots() },
+      world: { elements: this._elementsWire(), bots: this._wireBots() },
     });
   }
 
@@ -171,6 +178,9 @@ export class Session {
    * `{type:'elements', elements}` — the welcome message carries the same field for fresh joiners.
    */
   _sharedElements() { return (this.world.worldDoc.elements ??= []); }
+  /** Wire-safe copy: broadcasts must carry a SNAPSHOT, never the live array (an in-process
+   *  subscriber — or a test — would see its captured message mutated by later edits). */
+  _elementsWire() { return structuredClone(this._sharedElements()); }
 
   _addElement(p, msg) {
     if (p.role !== 'admin') return { type: 'error', error: 'only the host edits shared elements' };
@@ -187,7 +197,7 @@ export class Session {
     this._sharedElements().push(el);
     const res = { type: 'elementAdded', id: el.id, count: this._sharedElements().length };
     this._sendTo(p.token, res); // ack so the host learns the assigned id (handle() only echoes errors)
-    this.broadcast({ type: 'elements', elements: this._sharedElements() }); // everyone (incl. sender; admin UI ignores its own echo)
+    this.broadcast({ type: 'elements', elements: this._elementsWire() }); // everyone (incl. sender; admin UI ignores its own echo)
     return res;
   }
 
@@ -198,7 +208,7 @@ export class Session {
     el.position.x = Math.round(Number(msg?.x)); el.position.y = Math.round(Number(msg?.y));
     const res = { type: 'elementMoved', id: el.id, x: el.position.x, y: el.position.y };
     this._sendTo(p.token, res);
-    this.broadcast({ type: 'elements', elements: this._sharedElements() });
+    this.broadcast({ type: 'elements', elements: this._elementsWire() });
     return res;
   }
 
@@ -210,7 +220,7 @@ export class Session {
     els.splice(i, 1);
     const res = { type: 'elementRemoved', id: msg.id, count: els.length };
     this._sendTo(p.token, res);
-    this.broadcast({ type: 'elements', elements: els });
+    this.broadcast({ type: 'elements', elements: this._elementsWire() });
     return res;
   }
 
