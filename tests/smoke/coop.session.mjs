@@ -104,8 +104,11 @@ try {
   await H.ev(`(async()=>{const $=id=>document.getElementById(id);$('tab-world').click();$('coop-gw-url').value='${url}';$('coop-gw-name').value='host1';$('coop-host').click();for(let i=0;i<80&&$('coop-gw-code').hidden;i++)await new Promise(r=>setTimeout(r,100));})()`);
   const code = await H.ev(`document.getElementById('coop-gw-code').textContent`);
   if (!/^[A-Z0-9]{6}$/.test(code ?? '')) fail('host never revealed a code');
-  if (await H.ev(`!document.getElementById('coop-gw-row').hidden`).then(v => v)) fail('BUG4: host/join row still visible while hosting');
-  if (await H.ev(`!document.getElementById('coop-gw-fields').hidden`).then(v => v)) fail('BUG4: gateway/name fields still visible while hosting');
+  // Check VISUAL visibility (computed display), not just the hidden attribute: author CSS
+  // (display:flex) overrides [hidden] unless explicitly neutralised.
+  const visible = id => `getComputedStyle(document.getElementById('${id}')).display !== 'none'`;
+  if (await H.ev(visible('coop-gw-row')).then(v => v)) fail('BUG4: host/join row still visible while hosting');
+  if (await H.ev(visible('coop-gw-fields')).then(v => v)) fail('BUG4: gateway/name fields still visible while hosting');
 
   // ---------- BUG 1: host edits their design via the co-op flow and deploys ------
   await H.ev(`document.getElementById('coop-edit').click()`);
@@ -126,8 +129,9 @@ try {
   // ---------- BUG 5 (row hides on join) + BUG 3a (elements mirror on join) -------
   await J.ev(`(async()=>{const $=id=>document.getElementById(id);$('tab-world').click();$('coop-gw-url').value='${url}';$('coop-gw-name').value='join1';$('coop-join-code').value='${code}';$('coop-join').click();for(let i=0;i<80&&$('coop-gw-code').hidden;i++)await new Promise(r=>setTimeout(r,100));})()`);
   if ((await J.ev(`document.getElementById('coop-gw-code').textContent`)) !== code) fail('joiner did not land in the hosted world');
-  if (await J.ev(`!document.getElementById('coop-gw-row').hidden`).then(v => v)) fail('BUG5: host/join row still visible while joined');
-  if (await J.ev(`!document.getElementById('coop-gw-fields').hidden`).then(v => v)) fail('BUG5: gateway/name fields still visible while joined');
+  const visibleJ = id => `getComputedStyle(document.getElementById('${id}')).display !== 'none'`;
+  if (await J.ev(visibleJ('coop-gw-row')).then(v => v)) fail('BUG5: host/join row still visible while joined');
+  if (await J.ev(visibleJ('coop-gw-fields')).then(v => v)) fail('BUG5: gateway/name fields still visible while joined');
 
   const elsSig = pg => pg.ev(`JSON.stringify(window.__app().state.world.elements.map(e=>e.id+':'+e.position.x+','+e.position.y))`);
   const elsJ1 = await elsSig(J);
@@ -163,8 +167,9 @@ try {
   // ---------- BUG 6: host disconnects → joiner sent home, world reclaimed -------
   await H.ev(`document.getElementById('coop-disconnect').click()`);
   const kick = await poll(J, `return /host left/i.test($('coop-gw-status').textContent) ? $('coop-gw-status').textContent : null`, 6000, 'joiner told the host left');
-  if (await J.ev(`!document.getElementById('coop-gw-row').hidden`).then(v => !v)) fail('BUG6: joiner UI did not return to idle layout');
-  if (await J.ev(`document.getElementById('coop-gw-fields').hidden`).then(v => v)) fail('BUG6: gateway/name fields not restored after host left');
+  const visibleJ2 = id => `getComputedStyle(document.getElementById('${id}')).display !== 'none'`;
+  if (await J.ev(visibleJ2('coop-gw-row')).then(v => !v)) fail('BUG6: joiner UI did not return to idle layout');
+  if (await J.ev(visibleJ2('coop-gw-fields')).then(v => !v)) fail('BUG6: gateway/name fields not restored after host left');
   for (let i = 0; i < 40 && gw.worlds.size !== 0; i++) await sleep(100);
   if (gw.worlds.size !== 0) fail('BUG6: world not reclaimed after host left: ' + gw.worlds.size);
   const homeEls = await J.ev(`JSON.stringify(window.__app().state.world.elements.map(e=>e.type))`);
