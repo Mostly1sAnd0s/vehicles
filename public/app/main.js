@@ -144,8 +144,7 @@ async function main() {
     url: $('coop-gw-url'), name: $('coop-gw-name'), row: $('coop-gw-row'),
     host: $('coop-host'), join: $('coop-join'), joinCode: $('coop-join-code'),
     disconnect: $('coop-disconnect'), code: $('coop-gw-code'), status: $('coop-gw-status'),
-    deploy: $('coop-deploy'), editDesign: $('coop-edit'), controls: $('coop-controls'),
-    start: $('coop-start'), pause: $('coop-pause'), reset: $('coop-reset'),
+    deploy: $('coop-deploy'), editDesign: $('coop-edit'),
     remoteFleet: $('remote-fleet'),
   }, {
     // "Deploy design" ships the participant's co-op design (falls back to the editor's live

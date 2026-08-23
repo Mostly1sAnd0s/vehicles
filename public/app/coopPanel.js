@@ -62,9 +62,7 @@ export class CoopPanel {
       // main.js owns the editor: it loads THIS participant's co-op design into the editor.
       this.onEditDesign?.();
     });
-    this.ui.start.addEventListener('click', () => this.controls('start'));
-    this.ui.pause.addEventListener('click', () => this.controls('pause'));
-    this.ui.reset.addEventListener('click', () => this.controls('reset'));
+
 
     // Shared-fleet management (phase 4): −/+/✕ map to setCount; host-only, and the server enforces it.
     this.ui.remoteFleet.addEventListener('click', (e) => {
@@ -85,8 +83,6 @@ export class CoopPanel {
       if (msg.type === 'welcome') {
         this.ui.deploy.hidden = false;
         if (this.ui.editDesign) this.ui.editDesign.hidden = false;
-        this.ui.controls.hidden = c.you?.role !== 'admin'; // host-only session controls
-        this.updateStartPause();
         this.renderFleet();
       } else if (msg.type === 'roster') {
         // membership changed — refresh the client count; do NOT run this on snapshots, or the
@@ -94,8 +90,6 @@ export class CoopPanel {
         if (c.status === 'connected') { this.renderStatus(); this.renderFleet(); }
       } else if (msg.type === 'snapshot' || msg.type === 'peerDeployed') {
         if (c.status === 'connected') this.renderFleet(); // bot counts changed; status stays put
-      } else if (msg.type === 'state') {
-        this.updateStartPause(); // authoritative running flag after start/pause/reset
       } else if (msg.type === 'deployed') {
         // ack to our own deploy: the fleet count for OUR proto just changed too
         this.renderFleet();
@@ -140,12 +134,7 @@ export class CoopPanel {
     this.ui.status.textContent = `deploying your design… (driving as ${c.you?.name})`;
   }
 
-  /** Send a session control (start/pause/reset); admin-only on the server. */
-  controls(command) {
-    const c = this.client;
-    if (c.status !== 'connected') return;
-    c.controls(command);
-  }
+
 
   disconnect() {
     if (this.client.status !== 'connected') return;
@@ -183,17 +172,28 @@ export class CoopPanel {
   }
 
   // ---- layout -------------------------------------------------------------
-  /** Connected: swap Host/Join row for Disconnect, reveal code + deploy + (admin) controls + fleet. */
+  /** Connected: swap Host/Join row for Disconnect, reveal code + deploy + fleet. Joiners lose the bottom sim controls; hosts keep them. */
   setConnectedLayout(on) {
     this.ui.row.hidden = on;
     this.ui.disconnect.hidden = !on;
     this.ui.code.hidden = !on;
     this.ui.deploy.hidden = !on;
     if (!on) {
-      this.ui.controls.hidden = true;
       this.ui.remoteFleet.hidden = true;
       this.ui.remoteFleet.innerHTML = '';
     }
+    this._setWorldControlsVisibility();
+  }
+
+  /** Hide play/step/reset/time for joiners (non-admins); hosts keep full control. Viz toggles stay. */
+  _setWorldControlsVisibility() {
+    const hide = this._wasConnected && this.client.you?.role !== 'admin';
+    for (const id of ['btn-play', 'btn-step', 'btn-reset']) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = hide;
+    }
+    const ts = document.getElementById('timescale-label');
+    if (ts) ts.hidden = hide;
   }
 
   setBusy(busy) { for (const el of [this.ui.host, this.ui.join, this.ui.disconnect]) if (el) el.disabled = busy; }
@@ -209,14 +209,7 @@ export class CoopPanel {
       ` · ${n} client${n === 1 ? '' : 's'}${you}`;
   }
 
-  /** Start/Pause enabled state tracks the authoritative running flag. */
-  updateStartPause() {
-    const c = this.client;
-    const isAdmin = c.you?.role === 'admin' && c.status === 'connected';
-    if (this.ui.start) this.ui.start.disabled = !isAdmin || c.running;
-    if (this.ui.pause) this.ui.pause.disabled = !isAdmin || !c.running;
-    if (this.ui.reset) this.ui.reset.disabled = !isAdmin;
-  }
+
 
   /**
    * Shared fleet list (phase 3–4): every participant's prototype with its live bot count. The host

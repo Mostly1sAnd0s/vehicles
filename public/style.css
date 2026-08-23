@@ -47,6 +47,7 @@ button, select, input[type="number"], input[type="range"] {
 button:hover { border-color: var(--accent); }
 button.active { background: var(--accent); color: #08111c; border-color: var(--accent); }
 label { display: flex; align-items: center; gap: 6px; margin: 6px 0; color: var(--dim); }
+#timescale-label[hidden] { display: none; }
 select, input[type="number"] { width: 100%; }
 
 /* 4x4 body-color picker (plain swatches; no native color popup) */
@@ -129,6 +130,7 @@ ul.plain, #placed-list, #wire-list { list-style: none; margin: 0; padding: 0; }
   background: rgba(26,33,43,.9); border: 1px solid var(--line);
   padding: 6px 10px; border-radius: 8px;
 }
+#world-controls[hidden] { display: none; }
 #world-inspector {
   position: absolute; right: 10px; top: 10px; width: 200px;
   background: rgba(26,33,43,.95); border: 1px solid var(--line);

@@ -81,11 +81,7 @@
         <button id="coop-edit" hidden title="Open the editor on your co-op design">✎ Edit my design</button>
         <button id="coop-deploy" hidden title="Push your current design into the shared world — you drive your own bots only">Deploy design</button>
       </div>
-      <div class="coop-gw-row" id="coop-controls" hidden>
-        <button id="coop-start" title="Start the shared simulation (host)">▶ Start</button>
-        <button id="coop-pause" title="Pause the shared simulation (host)">⏸ Pause</button>
-        <button id="coop-reset" title="Return every bot to its spawn point (host)">↺ Reset</button>
-      </div>
+
       <div id="coop-gw-code" class="coop-code" hidden></div>
       <div id="coop-gw-status" class="dim">not in a shared world</div>
       <div class="pane-footer">Designed by Adam Kemp, 2026</div>
@@ -96,7 +92,7 @@
         <button id="btn-play">▶ Play</button>
         <button id="btn-step" title="Advance one physics step">Step</button>
         <button id="btn-reset">Reset</button>
-        <label>Time <input type="range" id="timescale" min="0.1" max="3" step="0.1" value="1"><span id="timescale-val">1.0×</span></label>
+        <label id="timescale-label">Time <input type="range" id="timescale" min="0.1" max="3" step="0.1" value="1"><span id="timescale-val">1.0×</span></label>
         <button id="btn-beams">Beams: on</button>
         <button id="btn-values" title="Show sensor and motor values on each robot body">Values: on</button>
         <button id="btn-paths" title="Show the motion trail behind each robot">Paths: off</button>
