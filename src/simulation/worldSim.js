@@ -289,6 +289,7 @@ export class HeadlessWorld {
           x: i.body.position.x, y: i.body.position.y, angle: i.body.angle,
           vx: i.body.velocity.x, vy: i.body.velocity.y,
           w: v?.body?.width ?? 80, h: v?.body?.height ?? 40, color: v?.body?.color ?? '#cc3333',
+          comps: (v.components ?? []).filter(c => c.local).map(c => ({ x: c.local.x, y: c.local.y, type: c.type })),
         };
       }),
     };

@@ -78,6 +78,19 @@ test('M0: snapshot is JSON-serializable with a stable shape', () => {
   assert.equal(b.owner, 'alice');
 });
 
+test('M5: snapshot carries each mounted component (comps) so thin clients can draw the real design', () => {
+  const { sim } = makeWorld({ protos: { bot: seekerDoc() } });
+  sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: 0, y: 0, rotation: 0 }, owner: 'alice' });
+  sim.step();
+  // Round-trip through JSON exactly as the transport does, then check the wire payload.
+  const b = JSON.parse(JSON.stringify(sim.snapshot())).bots[0];
+  assert.ok(Array.isArray(b.comps), 'snapshot bot must include a comps array');
+  // seekerDoc mounts a light sensor at (10,0) and a powered wheel at (0,12).
+  assert.deepEqual(b.comps,
+    [{ x: 10, y: 0, type: 'light_sensor' }, { x: 0, y: 12, type: 'powered_wheel' }],
+    'comps must list each local component with its body-local position and type');
+});
+
 test('M0: deploy swaps the running vehicle but preserves each clone\u2019s pose & momentum', () => {
   const { sim } = makeWorld({ protos: { bot: seekerDoc() } });
   const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: 50, y: 0, rotation: 0.3 } });

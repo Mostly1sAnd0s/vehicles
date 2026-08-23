@@ -126,6 +126,22 @@ try {
   const serverComps = gw.worlds.get(code).session.world.prototypeVehicle(hostP().protoId)?.components?.length;
   if (serverComps !== compsAfter) fail('BUG1: shared-world vehicle not updated by deploy (server ' + serverComps + ' vs edited ' + compsAfter + ')');
 
+  // ---------- BUG 7 (this fix): a deployed bot's geometry must reach the CLIENT over the wire ---
+  // The old snapshot only sent body w/h/color, so every client rendered a blank rectangle. Assert
+  // the host's LIVE client snapshot now carries each mounted component (x/y/type) for its bot.
+  const liveComps = await poll(H,
+    `const bots = window.__app().coopPanel.client.bots; const b = bots.find(x=>x.comps && x.comps.length); return b ? JSON.stringify(b.comps) : null`,
+    5000, 'client snapshot carries bot components');
+  const compsArr = JSON.parse(liveComps);
+  if (compsArr.length === 0) fail('BUG7: deployed bot arrived at the client with no components (blank rectangle)');
+  for (const c of compsArr) {
+    if (!Number.isFinite(c.x) || !Number.isFinite(c.y) || typeof c.type !== 'string')
+      fail('BUG7: malformed component geometry on the wire: ' + JSON.stringify(c));
+  }
+  // The host added a Powered Wheel during this test, so at least one wheel must be present.
+  if (!compsArr.some(c => c.type === 'powered_wheel'))
+    fail('BUG7: expected the added powered_wheel in the wire comps: ' + liveComps);
+
   // ---------- BUG 5 (row hides on join) + BUG 3a (elements mirror on join) -------
   await J.ev(`(async()=>{const $=id=>document.getElementById(id);$('tab-world').click();$('coop-gw-url').value='${url}';$('coop-gw-name').value='join1';$('coop-join-code').value='${code}';$('coop-join').click();for(let i=0;i<80&&$('coop-gw-code').hidden;i++)await new Promise(r=>setTimeout(r,100));})()`);
   if ((await J.ev(`document.getElementById('coop-gw-code').textContent`)) !== code) fail('joiner did not land in the hosted world');

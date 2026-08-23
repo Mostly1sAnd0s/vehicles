@@ -7,7 +7,7 @@ import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
-import { findInstanceAt } from '../src/models/hitTest.js';
+import { findInstanceAt, componentSize } from '../src/models/hitTest.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
@@ -685,6 +685,26 @@ export class WorldSim {
       ctx.rect(-(b.w ?? 80) / 2, -(b.h ?? 40) / 2, b.w ?? 80, b.h ?? 40);
       ctx.fill();
       ctx.stroke();
+      // Co-op (M5 p3): draw the deployed vehicle's parts so a shared bot reads as its actual
+      // design, not a blank body. componentSize only needs the type's config definition.
+      if (Array.isArray(b.comps)) {
+        for (const comp of b.comps) {
+          const def = this.componentDef(comp.type);
+          const s = componentSize({ local: { x: comp.x, y: comp.y } }, def);
+          ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
+          if (s.kind === 'rect') {
+            ctx.save();
+            ctx.translate(comp.x, comp.y);
+            ctx.rect(-s.along / 2, -s.lateral / 2, s.along, s.lateral);
+            ctx.fill();
+            ctx.restore();
+          } else {
+            ctx.beginPath();
+            ctx.arc(comp.x, comp.y, s.radius, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
       ctx.fillStyle = '#fff'; // heading notch at the front edge
       ctx.fillRect((b.w ?? 80) / 2 - 8, -2, 8, 4);
       ctx.restore();

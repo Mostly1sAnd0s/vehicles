@@ -20,6 +20,7 @@ function normalizeBot(b) {
     id: b?.id, protoId: b?.protoId, owner: b?.owner ?? null,
     x: num(b?.x), y: num(b?.y), angle: num(b?.angle), vx: num(b?.vx), vy: num(b?.vy),
     w: num(b?.w, 80), h: num(b?.h, 40), color: b?.color ?? '#cc3333',
+    comps: Array.isArray(b?.comps) ? b.comps.map(c => ({ x: num(c?.x), y: num(c?.y), type: c?.type })) : [],
   };
 }
 
