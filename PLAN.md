@@ -674,3 +674,35 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   the missing element), the smoke's own click-every-poll tick racing the settled “deployed…”
   status, and the truthiness-zero addElement refusal above. Full unit suite **232/232**, all
   browser smokes green.
+
+### M5 — bug-fix pass (found via a two-browser reproduction)
+- [x] **Edit-my-design + deploy.** Every participant gets a first-class co-op design: the panel's
+  **✎ Edit my design** opens the editor on *their* design (edits land in `state.coopVehicle`, not a
+  local prototype), and **Deploy design** ships exactly that doc — `world.deploy` rebuilds the
+  clones in place, so the shared world's vehicle updates for everyone. Hosts and joiners use the
+  same flow.
+- [x] **Fleet management works.** Root causes: (1) the count was read from the button's rendered
+  `data-count`, so a fast click acted on a stale count (a plus right after a deploy resent the old
+  size — looked broken); the handler now counts from live snapshot state. (2) growing a never-
+  deployed proto minted **ghost instances** (null vehicle) silently — now refused with `"<name> has
+  not deployed a design yet"`, surfaced in the status line. The −/+/✕ buttons were also 11px with
+  no padding and read as inert; they're real buttons now.
+- [x] **Element mirroring.** Root cause: the host's pre-loaded world never crossed the wire —
+  joiners only saw elements added AFTER joining. Now (a) the host seeds the whole local element
+  list onto the shared world at host-time (new admin-only `setElements`), and (b) joiners mirror
+  immediately on welcome, not only on later change events.
+- [x] **Host leaves → everyone sent home.** A world left without its admin lingered dead. Gateway:
+  when the leaver is the admin, broadcast `{type:'worldClosed', reason:'host left'}`, terminate the
+  remaining sockets, and reclaim the world. Clients return to the Host/Join layout with a "the host
+  left — <code> was closed" status, and participants get their **home world restored** (pre-join
+  elements were backed up on join).
+- [x] *(rows hidden while connected)* was already implemented in phase 2; re-verified on both pages.
+  **New permanent regression test:** `tests/smoke/coop.session.mjs` drives TWO real browser pages
+  (host + joiner) through the entire bug list: edit+deploy own design → server vehicle changed ·
+  fleet −/+/✕ on others' rows with live counts · elements mirror on join AND live · host/join row
+  hidden while connected · host leave → kick home + world reclaimed.
+
+  **Bugs the fix work caught:** the stale-count race above; a shrunken-to-zero fleet mislabeled
+  "no design deployed yet" (now factual `0 bots`); the panel smoke's observer had to match seeded
+  elements by id, not type. Unit suite **234/234**, all browser smokes green across three
+  consecutive runs.

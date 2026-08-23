@@ -20,10 +20,14 @@ async function main() {
     load('config/actuators.json'),
   ]);
 
+  // Sentinel owner for the co-op design edit slot: while it's set, editor changes land in
+  // state.coopVehicle (what "Deploy design" ships) instead of a local world prototype.
+  const COOP_DESIGN_MARKER = { __coopDesign: true };
   const state = {
     configs: { app: appCfg, ui: uiCfg, components, sensors, actuators },
     vehicle: null,
     world: null,
+    coopVehicle: null, // this participant's design for the shared world (null until edited/deployed)
   };
 
   const [vehicle, world] = await Promise.all([
@@ -140,10 +144,24 @@ async function main() {
     url: $('coop-gw-url'), name: $('coop-gw-name'), row: $('coop-gw-row'),
     host: $('coop-host'), join: $('coop-join'), joinCode: $('coop-join-code'),
     disconnect: $('coop-disconnect'), code: $('coop-gw-code'), status: $('coop-gw-status'),
-    deploy: $('coop-deploy'), controls: $('coop-controls'),
+    deploy: $('coop-deploy'), editDesign: $('coop-edit'), controls: $('coop-controls'),
     start: $('coop-start'), pause: $('coop-pause'), reset: $('coop-reset'),
     remoteFleet: $('remote-fleet'),
-  }, { getVehicle: () => state.vehicle });
+  }, {
+    // "Deploy design" ships the participant's co-op design (falls back to the editor's live
+    // vehicle before a co-op design exists).
+    getVehicle: () => state.coopVehicle ?? state.vehicle,
+    // "Edit my design": open the editor on THIS participant's co-op design. Hosts and joiners
+    // alike edit their own vehicle this way; deploying then updates it in the shared world.
+    onEditDesign: () => {
+      if (coopPanel.client.status !== 'connected') return;
+      if (!state.coopVehicle) state.coopVehicle = clone(state.vehicle); // seed from the current design
+      state.vehicle = clone(state.coopVehicle);
+      state.vehicleOwner = COOP_DESIGN_MARKER;
+      editor.refresh();
+      activate('editor');
+    },
+  });
 
   // App-level co-op binding (M5 p3): the World canvas IS the shared world.
   const addElementBtns = [ $('add-light'), $('add-rock'), $('add-wall') ];
@@ -153,12 +171,30 @@ async function main() {
       // The host edits elements on the canvas; participants get a mirrored read-only world.
       const isHost = c.you?.role === 'admin';
       for (const b of addElementBtns) b.disabled = !isHost;
+      if (isHost && c.mode === 'host') {
+        // Seed the shared world with the host's whole local element list — otherwise a joiner
+        // would only ever see elements added AFTER joining (the pre-loaded world never crossed
+        // the wire).
+        c.setElements(clone(state.world.elements));
+      } else if (!isHost) {
+        // Mirror immediately on join (welcome carries the current shared elements), not just on
+        // later host edits. Remember the home world so we can restore it when the session ends.
+        state._localElementsBackup = clone(state.world.elements);
+        state.world.elements = clone(c.elements ?? []);
+        worldSim?.buildObstacles();
+      }
     } else if (msg.type === 'elements' && c.status === 'connected' && c.you?.role !== 'admin') {
       // Mirror the host's edit: replace the local static elements and rebuild obstacle bodies.
       state.world.elements = clone(msg.elements ?? []);
       worldSim?.buildObstacles();
-    } else if (msg.type === 'closed') {
+    } else if (msg.type === 'closed' || msg.type === 'worldClosed') {
       for (const b of addElementBtns) b.disabled = false; // back to single-player editing
+      // Return the participant to their home world (the shared mirror is gone now).
+      if (c.you?.role !== 'admin' && state._localElementsBackup) {
+        state.world.elements = clone(state._localElementsBackup);
+        state._localElementsBackup = null;
+        worldSim?.buildObstacles();
+      }
     }
   });
 
@@ -167,6 +203,9 @@ async function main() {
   editor.hooks.onVehicleChanged = v => {
     const w = state.world.vehiclePrototypes.find(p => p === (state.vehicleOwner ?? null));
     if (w) w._vehicle = clone(v);
+    // Co-op: while editing the participant's own co-op design, remember it there — "Deploy
+    // design" ships this exact document into the shared world.
+    if (state.vehicleOwner === COOP_DESIGN_MARKER) state.coopVehicle = clone(v);
     // keep any running sim in step with the edit (signature-guarded: wire
     // maps refresh on wiring changes, bodies only on geometry changes)
     worldSim?.syncInstances();

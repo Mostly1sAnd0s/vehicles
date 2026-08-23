@@ -128,7 +128,7 @@ try {
     plus.click();
     await poll(() => /2 bot/.test($('remote-fleet').textContent), 40);
     $('remote-fleet').querySelector('button[data-act="remove"]').click();
-    await poll(() => /0 bot/.test($('remote-fleet').textContent), 40);
+    await poll(() => /no design|0 bot/.test($('remote-fleet').textContent), 40);
     // grow it back to one so the world has a bot for the observer to see
     $('remote-fleet').querySelector('button[data-act="plus"]').click();
     await poll(() => /1 bot/.test($('remote-fleet').textContent), 40);
@@ -149,7 +149,7 @@ try {
     await sleep(400);
     if (/^⚠/.test($('coop-gw-status').textContent)) throw new Error('server refused an element edit: ' + $('coop-gw-status').textContent);
 
-    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, addedEl: { type: el0.type, x: el0.position.x, y: el0.position.y } });
+    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, addedEl: { id: el0.id, type: el0.type, x: el0.position.x, y: el0.position.y } });
   })()`));
 
   const { layout, code, hosted, deployedStatus, fleetText, addedEl } = resultA;
@@ -176,9 +176,10 @@ try {
       else if (Date.now() - t0 > 4000) { clearInterval(iv); reject(new Error('observer welcome timeout')); }
     }, 25);
   });
+  // The host seeded their pre-loaded world on host (bugfix), so match the added light by id.
   const obsEls = obs.seen.welcome[0].world.elements;
-  const obsLight = obsEls.find(e => e.type === 'light');
-  if (!obsLight) fail('observer welcome missing the light the host added: ' + JSON.stringify(obsEls));
+  const obsLight = obsEls.find(e => e.id === addedEl.id);
+  if (!obsLight) fail('observer welcome missing the light the host added (id ' + addedEl.id + '): ' + JSON.stringify(obsEls.map(e => e.id)));
   // The move (to 25,15) was sent through the same onElementChange hook a canvas drag uses, so
   // the observer's welcome must show the MOVED position, not the spawn point.
   if (obsLight.position.x !== 25 || obsLight.position.y !== 15)

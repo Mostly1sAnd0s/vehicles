@@ -116,6 +116,7 @@ export class Session {
       case 'setCount':      reply = this._setCount(p, msg); break;
       case 'controls':      reply = this._controls(p, msg); break;
       case 'addElement':    reply = this._addElement(p, msg); break;
+      case 'setElements':   reply = this._setElements(p, msg); break;
       case 'moveElement':   reply = this._moveElement(p, msg); break;
       case 'removeElement': reply = this._removeElement(p, msg); break;
       default:         reply = { type: 'error', error: `unknown message type: ${msg?.type}` };
@@ -123,6 +124,26 @@ export class Session {
     // Errors are private feedback to the actor; world-affecting successes already broadcast themselves.
     if (reply?.type === 'error') this._sendTo(p.token, reply);
     return reply;
+  }
+
+  /** The participant who owns a proto (for error copy); null for unknown ids. */
+  _ownerOf(protoId) { for (const p of this.participants.values()) if (p.protoId === protoId) return p; return null; }
+
+  _setCount(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'setCount requires admin' };
+    const protoId = msg.protoId ?? p.protoId; // no id -> resize your own fleet
+    const n = Math.max(0, Math.min(50, Math.trunc(Number(msg?.count)) || 0));
+    const owner = this._ownerOf(protoId);
+    if (!owner) return { type: 'error', error: `unknown protoId: ${protoId}` };
+    // Growing a fleet that has never deployed would mint ghost instances (null vehicle) — refuse
+    // with a message the UI can show instead of a silent no-op.
+    if (n > 0 && !owner.deployed) return { type: 'error', error: `${owner.name} has not deployed a design yet` };
+    const count = this.world.setCount(protoId, n, owner.seed);
+    this._tagOwner(protoId, owner.name); // admin-grown clones inherit the proto's owner
+    this.stats.adminCommands++;
+    const res = { type: 'countSet', protoId, count };
+    this.broadcast(res);
+    return res;
   }
 
   _deploy(p, msg) {
@@ -137,20 +158,6 @@ export class Session {
     const res = { type: 'deployed', protoId: p.protoId, count: this.world.instancesFor(p.protoId).length };
     this._sendTo(p.token, res);                       // ack to the deployer
     this.broadcast({ type: 'peerDeployed', protoId: p.protoId, name: p.name }); // let everyone see it land
-    return res;
-  }
-
-  _setCount(p, msg) {
-    if (p.role !== 'admin') return { type: 'error', error: 'setCount requires admin' };
-    const protoId = msg.protoId ?? p.protoId;
-    const owner = [...this.participants.values()].find(x => x.protoId === protoId);
-    if (!owner) return { type: 'error', error: `unknown protoId: ${protoId}` };
-    const n = Math.max(0, Math.min(50, Math.trunc(Number(msg.count)) || 0));
-    const count = this.world.setCount(protoId, n, owner.seed);
-    this._tagOwner(protoId, owner.name); // admin-grown clones inherit the proto's owner
-    this.stats.adminCommands++;
-    const res = { type: 'countSet', protoId, count };
-    this.broadcast(res);
     return res;
   }
 
@@ -207,6 +214,22 @@ export class Session {
     if (!el) return { type: 'error', error: `no such element: ${msg?.id}` };
     el.position.x = Math.round(Number(msg?.x)); el.position.y = Math.round(Number(msg?.y));
     const res = { type: 'elementMoved', id: el.id, x: el.position.x, y: el.position.y };
+    this._sendTo(p.token, res);
+    this.broadcast({ type: 'elements', elements: this._elementsWire() });
+    return res;
+  }
+
+  /**
+   * Host seeds the shared world with their whole local element list at host-time. Without this a
+   * joiner would only ever see elements added AFTER joining (the pre-loaded world never crossed
+   * the wire). Replaces the list wholesale and broadcasts like the other element commands.
+   */
+  _setElements(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'only the host edits shared elements' };
+    const els = Array.isArray(msg?.elements) ? msg.elements : null;
+    if (!els) return { type: 'error', error: 'setElements requires an elements array' };
+    this.world.worldDoc.elements = els;
+    const res = { type: 'elementsSet', count: els.length };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });
     return res;

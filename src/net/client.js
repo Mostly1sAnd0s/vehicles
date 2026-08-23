@@ -125,6 +125,7 @@ export class CoopClient {
   addElement(element) { return this._send({ type: 'addElement', element }); }
   moveElement(id, x, y) { return this._send({ type: 'moveElement', id, x, y }); }
   removeElement(id) { return this._send({ type: 'removeElement', id }); }
+  setElements(elements) { return this._send({ type: 'setElements', elements }); } // host seeds the world at host-time
 
   _send(msg) { if (this.ws && this.status === 'connected') this.ws.send(JSON.stringify(msg)); return this; }
 

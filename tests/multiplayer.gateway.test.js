@@ -136,6 +136,19 @@ test('M5 gateway: host->code, join by code, roster, world isolation, prune+GC on
     erin.ws.close();
     await waitFor(() => (alice.byType.roster?.at(-1)?.clients.length ?? 99) === 2, 2500, 'roster back to alice+bob');
 
+    // When the HOST leaves, the world dissolves: remaining participants get `worldClosed`, their
+    // sockets are terminated, and the world is reclaimed — never strand them in a session no one
+    // can run (the UI sends them home).
+    const dave2 = await connect({ type: 'host', name: 'dave' });
+    await waitFor(() => dave2.byType.welcome?.[0], 2000, "dave's welcome");
+    const code3 = dave2.byType.welcome[0].code;
+    const erin2 = await connect({ type: 'join', name: 'erin2', code: code3 });
+    await waitFor(() => erin2.byType.welcome?.[0], 2000, "erin2's welcome");
+    dave2.ws.close();
+    await waitFor(() => erin2.byType.worldClosed?.[0] && /host left/.test(erin2.byType.worldClosed[0].reason), 2500, 'worldClosed to reach the straggler');
+    await waitFor(() => erin2.ws.readyState === 3 /* CLOSED */, 2500, 'gateway to terminate the straggler');
+    await waitFor(() => !gw.worlds.has(code3), 2500, "dave's world to be reclaimed");
+
     // Leaving prunes the leaver's bots and updates the roster.
     const bobBots = () => bob.all.filter(m => m.type === 'snapshot').at(-1)?.bots.length ?? 0;
     bob.ws.close();

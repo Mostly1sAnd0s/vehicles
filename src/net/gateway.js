@@ -46,6 +46,7 @@ export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0,
 
   const rosterOf = (w) => [...w.session.participants.values()].map((p) => ({ name: p.name, role: p.role, protoId: p.protoId }));
   const bind = (socket, w, token) => {
+    w.sockets.set(token, socket);
     w.session.bind(token, (m) => { if (socket.readyState === OPEN) socket.send(JSON.stringify(m)); });
   };
 
@@ -58,7 +59,7 @@ export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0,
           const code = randomCode(worlds);
           const session = new Session({ Matter, dtMs, configs, worldDoc: { elements: [], vehiclePrototypes: [] } });
           session.code = code; // echoed in the welcome so the UI can display/persist it
-          const w = { code, session, createdAt: Date.now() };
+          const w = { code, session, createdAt: Date.now(), sockets: new Map() }; // token -> socket
           worlds.set(code, w);
           const { token } = session.join({ name: msg.name, role: 'admin' }); // host == that world's admin
           state = { code, token };
@@ -95,9 +96,20 @@ export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0,
       if (!state) return;
       const w = worlds.get(state.code);
       if (!w) return;
+      w.sockets.delete(state.token);
+      const leaverWasAdmin = w.session.participants.get(state.token)?.role === 'admin';
       w.session.leave(state.token); // prunes this participant's bots from the world
-      if (w.session.participants.size === 0) worlds.delete(state.code); // nothing left: reclaim it
-      else w.session.broadcast({ type: 'roster', clients: rosterOf(w) });
+      if (w.session.participants.size === 0) {
+        worlds.delete(state.code); // nothing left: reclaim it
+      } else if (leaverWasAdmin) {
+        // The world has no admin left — it is dead. Kick everyone home instead of stranding them
+        // in a session nobody can run, then reclaim the world.
+        w.session.broadcast({ type: 'worldClosed', reason: 'host left' });
+        for (const s of w.sockets.values()) { try { s.terminate(); } catch {} }
+        worlds.delete(state.code);
+      } else {
+        w.session.broadcast({ type: 'roster', clients: rosterOf(w) });
+      }
     });
     socket.on('error', () => {}); // never let a flaky socket crash a world
   });

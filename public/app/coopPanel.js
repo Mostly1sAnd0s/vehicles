@@ -34,11 +34,12 @@ export class CoopPanel {
    *                                   deploy, controls, start, pause, reset, remoteFleet}
    * @param {{client?:CoopClient, getVehicle?:(()=>object)}} [opts]
    */
-  constructor(ui, { client, getVehicle } = {}) {
+  constructor(ui, { client, getVehicle, onEditDesign } = {}) {
     // Fail fast with the missing element's name rather than a cryptic null error mid-constructor.
     for (const [k] of Object.entries(ui)) if (!ui[k]) throw new Error('CoopPanel: missing UI element "' + k + '"');
     this.ui = ui;
     this.getVehicle = getVehicle;
+    this.onEditDesign = onEditDesign;
     this.client = client ?? new CoopClient();
     this._wasConnected = false; // for "unexpected drop" handling on `closed`
     this._userLeft = false;     // set by an intentional Disconnect so `closed` stays quiet
@@ -57,6 +58,10 @@ export class CoopPanel {
     this.ui.join.addEventListener('click', () => this.join());
     this.ui.disconnect.addEventListener('click', () => this.disconnect());
     this.ui.deploy.addEventListener('click', () => this.deploy());
+    this.ui.editDesign?.addEventListener('click', () => {
+      // main.js owns the editor: it loads THIS participant's co-op design into the editor.
+      this.onEditDesign?.();
+    });
     this.ui.start.addEventListener('click', () => this.controls('start'));
     this.ui.pause.addEventListener('click', () => this.controls('pause'));
     this.ui.reset.addEventListener('click', () => this.controls('reset'));
@@ -65,8 +70,11 @@ export class CoopPanel {
     this.ui.remoteFleet.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-act]');
       if (!btn) return;
-      const count = Number(btn.dataset.count) || 0;
+      // Count from LIVE snapshot state, never from the rendered button's data-count: the fleet
+      // re-renders at snapshot rate, so a fast click can otherwise act on a stale count (a plus
+      // right after a deploy would resend the old size and appear to do nothing).
       const protoId = btn.dataset.protoId;
+      const count = this.client.bots.filter((b) => b.protoId === protoId).length;
       if (btn.dataset.act === 'minus') { if (count > 0) this.client.setCount(protoId, count - 1); }
       else if (btn.dataset.act === 'plus') { if (count < MAX_FLEET) this.client.setCount(protoId, count + 1); }
       else if (btn.dataset.act === 'remove') { this.client.setCount(protoId, 0); }
@@ -76,6 +84,7 @@ export class CoopPanel {
       const c = this.client;
       if (msg.type === 'welcome') {
         this.ui.deploy.hidden = false;
+        if (this.ui.editDesign) this.ui.editDesign.hidden = false;
         this.ui.controls.hidden = c.you?.role !== 'admin'; // host-only session controls
         this.updateStartPause();
         this.renderFleet();
@@ -93,6 +102,13 @@ export class CoopPanel {
         this.ui.status.textContent = `deployed — ${msg.count ?? 1} bot(s) driving your design`;
       } else if (msg.type === 'error') {
         this.ui.status.textContent = '⚠ ' + (msg.error ?? 'server error');
+      } else if (msg.type === 'worldClosed') {
+        // The host left: the gateway dissolved the world. Return home (layout back to Host/Join).
+        this._wasConnected = false;
+        this.ui.status.textContent = `the host left — ${c.code ?? 'the world'} was closed`;
+        this.client.close();
+        this.setConnectedLayout(false);
+        this.setBusy(false);
       } else if (msg.type === 'closed' && this._wasConnected) {
         // The gateway went away (or the socket dropped) mid-session.
         if (!this._userLeft) this.ui.status.textContent = 'connection closed — left the shared world';
@@ -118,6 +134,7 @@ export class CoopPanel {
     const c = this.client;
     if (c.status !== 'connected') { this.ui.status.textContent = 'not in a shared world'; return; }
     const v = this.getVehicle?.();
+    if (v && !this.onEditDesign) { /* first-class design slot not wired — fall through to editor vehicle */ }
     if (!v) { this.ui.status.textContent = 'no design to deploy — build a vehicle in the editor first'; return; }
     c.deploy(v);
     this.ui.status.textContent = `deploying your design… (driving as ${c.you?.name})`;

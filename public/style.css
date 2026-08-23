@@ -94,11 +94,13 @@ main { flex: 1; min-height: 0; display: flex; }
 
 /* Shared fleet list (M5 p3–4): one row per participant, admin gets −/+/✕ */
 .remote-fleet { margin: 4px 0; }
-.fleet-row { display: flex; align-items: center; gap: 4px; padding: 2px 0; font-size: 12px; }
+.fleet-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }
 .fleet-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fleet-count { font-size: 11px; }
-.fleet-btns { display: flex; gap: 2px; }
-.fleet-btns button { padding: 0 5px; line-height: 18px; }
+/* Fleet management (M5 p4): these must read as real buttons — tiny ones looked inert. */
+.fleet-btns { display: flex; gap: 3px; margin-left: auto; }
+.fleet-btns button { padding: 2px 9px; font-size: 12px; line-height: 16px; cursor: pointer; }
+.fleet-btns button:disabled { opacity: .4; cursor: default; }
 #palette button, #world-side > button { width: 100%; margin: 3px 0; text-align: left; }
 #palette button.placing { border-color: var(--accent); background: rgba(77,163,255,.15); }
 

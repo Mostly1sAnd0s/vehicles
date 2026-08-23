@@ -143,3 +143,46 @@ test('shared elements are host-editable: add/move/remove broadcast the full list
   assert.deepEqual(lists, [1, 1, 0], 'bob saw add (1), move (still 1), remove (0)');
   assert.equal(gotA.filter(m => m.type === 'elements').length, 3, 'host receives the same broadcasts');
 });
+
+test('setElements replaces the shared list (host seeds their world at host-time) and is host-only', () => {
+  const s = makeSession();
+  const a = s.join({ name: 'alice', role: 'admin' });
+  const b = s.join({ name: 'bob', role: 'participant' });
+  const gotB = capture(s, b.token);
+  capture(s, a.token);
+
+  assert.equal(s.handle(b.token, { type: 'setElements', elements: [{ type: 'light', position: { x: 0, y: 0 } }] }).type, 'error', 'participants refused');
+  const res = s.handle(a.token, { type: 'setElements', elements: [
+    { id: 'l1', type: 'light', position: { x: -50, y: 0 }, properties: { intensity: 4000 } },
+    { id: 'r1', type: 'rock', position: { x: 60, y: 20 }, properties: { radius: 40 } },
+  ] });
+  assert.equal(res.type, 'elementsSet');
+  assert.equal(res.count, 2);
+  assert.deepEqual(s.world.worldDoc.elements.map(e => e.id), ['l1', 'r1'], 'whole list replaced, not appended');
+  const mirror = gotB.filter(m => m.type === 'elements').at(-1)?.elements;
+  assert.equal(mirror.length, 2, 'joiner received the full seeded list');
+  assert.deepEqual(s.handle(a.token, { type: 'setElements' }), { type: 'error', error: 'setElements requires an elements array' });
+});
+
+test('growing a fleet that has never deployed is refused (no ghost instances)', () => {
+  const s = makeSession();
+  const a = s.join({ name: 'alice', role: 'admin' });
+  const b = s.join({ name: 'bob', role: 'participant' });
+  capture(s, a.token); capture(s, b.token);
+
+  // bob has NOT deployed yet: the host cannot grow bob's fleet (it would mint null-vehicle bots)
+  const rej = s.handle(a.token, { type: 'setCount', protoId: b.protoId, count: 2 });
+  assert.equal(rej.type, 'error');
+  assert.match(rej.error, /has not deployed a design yet/);
+  assert.equal(s.world.instancesFor(b.protoId).length, 0, 'no instances minted');
+
+  // once bob deploys, growing works as before
+  s.handle(b.token, { type: 'deploy', vehicle: seekerDoc() });
+  const ok = s.handle(a.token, { type: 'setCount', protoId: b.protoId, count: 2 });
+  assert.equal(ok.type, 'countSet');
+  assert.equal(s.world.instancesFor(b.protoId).length, 2);
+
+  // shrinking never needs a deployed vehicle
+  s.handle(a.token, { type: 'setCount', protoId: b.protoId, count: 0 });
+  assert.equal(s.world.instancesFor(b.protoId).length, 0);
+});
