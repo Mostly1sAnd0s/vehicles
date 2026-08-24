@@ -43,6 +43,16 @@ const { url } = await gw.start();
 
 const fail = m => { console.error('FAIL:', m); chrome.kill('SIGKILL'); srv.kill('SIGKILL'); gw.close().catch(() => {}); process.exit(1); };
 const ok = m => { console.log('PASS:', m); chrome.kill('SIGKILL'); srv.kill('SIGKILL'); gw.close().catch(() => {}); process.exit(0); };
+let _lastStep = 'start';
+const step = m => { _lastStep = m; console.error(`step: ${m}`); };
+// Global watchdog (this machine's headless Chrome stalls): dump session state, then exit(3).
+setTimeout(() => {
+  try {
+    for (const w of gw.worlds.values()) console.error(`WATCHDOG world=${w.code} running=${w.session.running} bots=${w.world.instances.length}`);
+  } catch {}
+  console.error(`WATCHDOG: stuck, lastStep=${_lastStep}`);
+  process.exit(3);
+}, 420_000);
 
 try {
   let targets;
@@ -64,8 +74,12 @@ try {
     const send = (method, params = {}) => new Promise(res => { const mid = ++id; pending.set(mid, res); ws.send(JSON.stringify({ id: mid, method, params })); });
     await new Promise(r => ws.onopen = r);
     await send('Page.enable'); await send('Runtime.enable');
-    const ev = async expression => {
-      const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    const ev = async (expression, timeoutMs = 20000) => {
+      // A wedged page promise must fail the probe, not hang it forever.
+      const r = await Promise.race([
+        send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error(`CDP ev timeout after ${timeoutMs}ms`)), timeoutMs).unref()),
+      ]);
       if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 400));
       return r.result?.value;
     };
@@ -189,6 +203,93 @@ try {
   const elsJ2 = await elsSig(J);
   const elsH2 = await elsSig(H);
   if (elsJ2 !== elsH2) fail('BUG3: live element edit not mirrored to joiner (joiner ' + elsJ2 + ' vs host ' + elsH2 + ')');
+
+  // ---------- BUG 9 (this fix): the shared world actually RUNS — Play drives the session,
+  // the deployed vehicle senses the seeded elements, motors fire, it moves, and the client
+  // carries beams/values/paths data from the snapshot. Before the fix Play only ran the LOCAL
+  // mirror and nothing ever reached the server: deployed bots sat paused forever and ignored
+  // lights, rocks, and walls (you could drag a wall straight through them). Three independent
+  // checks, each deterministic at this test's rocket tuning (thrustScale=2):
+  //   A. SENSE + ACTUATE — one controlled server-side step with the bot on the light; read
+  //      lastSamples/lastMotors directly (no timing races).
+  //   B. WIRE PROTOCOL — the client's bot snapshot carries samples[] + motors[] (without which
+  //      beams/values can never render on a thin client).
+  //   C. PLAY VIA UI — the authoritative running flag flips, the bot actually moves, Pause/
+  //      Reset work and clear client-side trails.
+  step('BUG9: redeploy host design');
+  await H.ev(`document.getElementById('coop-deploy').click()`);
+  await sleep(500);
+  const session = () => [...gw.worlds.values()][0].session;
+  const hostBot = () => {
+    const p = [...session().participants.values()].find(x => x.name === 'host1');
+    return session().world.instances.find(i => i.protoId === p.protoId);
+  };
+
+  // A bright light right on the spawn seed: the deployed bot spawns ON it.
+  step('BUG9: drop a bright light on the spawn seed');
+  await H.ev(`(()=>{const app=window.__app();app.state.world.elements.push({id:'bug9-light',type:'light',primitive:'circle',position:{x:-360,y:0},rotation:0,scale:{x:1,y:1},properties:{intensity:20000}});app.coopPanel.client.setElements(JSON.parse(JSON.stringify(app.state.world.elements)));return 1})()`);
+  await sleep(300);
+
+  // A. SENSE + ACTUATE (deterministic): reseat exactly onto the light, step once, read results.
+  step('BUG9: single-step sensing');
+  const inst0 = hostBot();
+  if (!inst0?.body) fail('BUG9: no host bot instance after redeploy');
+  session().world.reset(); // exact seed pose (-360, 0) = directly on the light
+  session().world.step();
+  const aSamp = Math.max(0, ...(inst0.lastSamples ?? []).map(x => x.value));
+  const aMot = Math.max(0, ...(inst0.lastMotors ?? []).map(m => Math.abs(m.force)));
+  if (!(aSamp > 0.3)) fail('BUG9: deployed bot never sensed the shared light (max sample ' + aSamp.toFixed(3) + ')');
+  if (!(aMot > 0.3)) fail('BUG9: sensor readings never reached the actuators (max motor force ' + aMot.toFixed(3) + ')');
+  step('BUG9: sensed value=' + aSamp.toFixed(3) + ' motor force=' + aMot.toFixed(3));
+
+  // B. WIRE PROTOCOL: while paused, snapshots keep flowing and carry the (still-hot) samples, so
+  // the client can prove it received sensor + motor data for its bot.
+  step('BUG9: wire carries samples+motors');
+  let wire = null;
+  for (let i = 0; i < 40 && !wire; i++) {
+    wire = await H.ev(`(()=>{const app=window.__app();const c=app.coopPanel.client;const b=(c.bots||[]).find(b=>b.owner===c.you.name);if(!b||!Array.isArray(b.samples)||!b.samples.length||!Array.isArray(b.motors)||!b.motors.length)return null;return JSON.stringify({best:Math.max(...b.samples.map(s=>s.value)),fmax:Math.max(...b.motors.map(m=>Math.abs(m.force))),coop:!!(app.worldSim&&app.worldSim.coopMode)})})()`);
+    if (!wire) await sleep(100);
+  }
+  if (!wire) fail('BUG9: client bot snapshot never carried samples[]/motors[] (beams+values cannot render on the client)');
+  const w = JSON.parse(wire);
+  if (!w.coop) fail('BUG9: world is not in co-op render mode (the local sim would paint over the shared world): ' + wire);
+  if (!(w.best > 0.3)) fail('BUG9: wire sensor data is dead (max value on the wire ' + w.best.toFixed(3) + ')');
+  step('BUG9: wire best=' + w.best.toFixed(3) + ' fmax=' + w.fmax.toFixed(3));
+
+  // C. PLAY VIA UI: authoritative start, real motion, label follows the flag, then Pause/Reset.
+  step('BUG9: click Play');
+  await H.ev(`document.getElementById('btn-play').click()`);
+  let runningNow = false;
+  for (let i = 0; i < 40 && !runningNow; i++) { runningNow = session().running === true; if (!runningNow) await sleep(100); }
+  if (!runningNow) fail('BUG9: Play did not start the shared session (the server never runs, so deployed bots can\u2019t interact with the world)');
+  let p0 = null, dx = 0;
+  for (let i = 0; i < 30 && dx < 5; i++) {
+    const raw = await H.ev(`(()=>{const c=window.__app().coopPanel.client;const b=(c.bots||[]).find(b=>b.owner===c.you.name);return b?b.x+','+b.y:null})()`);
+    if (raw) { const [x, y] = raw.split(',').map(Number); if (!p0) p0 = { x, y }; else dx = Math.max(dx, Math.hypot(x - p0.x, y - p0.y)); }
+    await sleep(100);
+  }
+  if (dx < 5) fail('BUG9: deployed bot never moved while the shared session ran — a frozen mirror (dx=' + dx.toFixed(1) + ')');
+  const btnTxt = await H.ev(`document.getElementById('btn-play').textContent`);
+  if (!/Pause/.test(btnTxt)) fail('BUG9: Play button did not flip to Pause (authoritative state not applied): ' + btnTxt);
+
+  // Pause actually stops the session; Reset reseats the bot and clears client-side trails.
+  step('BUG9: pause');
+  await H.ev(`document.getElementById('btn-play').click()`);
+  for (let i = 0; i < 20 && session().running; i++) await sleep(100);
+  if (session().running) fail('BUG9: Pause did not stop the shared session');
+  step('BUG9: reset');
+  await H.ev(`document.getElementById('btn-reset').click()`);
+  let home = false, hp = null;
+  for (let i = 0; i < 20 && !home; i++) {
+    hp = JSON.parse(await H.ev(`(()=>{const app=window.__app();const c=app.coopPanel.client;const b=c.bots.find(b=>b.owner===c.you.name);return JSON.stringify({x:b.x,y:b.y,trail:app.worldSim?((app.worldSim.coopPaths.get(b.id)||[]).length):-1})})()`));
+    // The server keeps snapshotting while paused, so a couple of fresh trail points re-accumulate
+    // right after the clear — trails correctly restart at the seed. (trail = this bot's own
+    // point count; coopPaths.size would count BOTS, not points.)
+    home = Math.hypot(hp.x - -360, hp.y - 0) < 5 && hp.trail <= 3;
+    if (!home) await sleep(50);
+  }
+  if (!home) fail('BUG9: Reset did not return the bot to its spawn seed (-360, 0) or clear trails: ' + JSON.stringify(hp));
+  step('BUG9 done');
 
   // ---------- BUG 6: host disconnects → joiner sent home, world reclaimed -------
   await H.ev(`document.getElementById('coop-disconnect').click()`);

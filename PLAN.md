@@ -706,3 +706,21 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   "no design deployed yet" (now factual `0 bots`); the panel smoke's observer had to match seeded
   elements by id, not type. Unit suite **234/234**, all browser smokes green across three
   consecutive runs.
+
+- [x] **The shared world actually runs ("deployed bots ignore the world elements").** Root cause: two
+  disconnected simulations — Play/Pause/Reset toggled only the LOCAL single-player mirror and nothing ever
+  sent `controls` to the server session, so deployed vehicles never stepped (no light sensing, walls passed
+  straight through them); snapshots also carried no sensor data, so beams/values/paths could never render for
+  shared bots. Fix: (a) while connected, Play/Pause/Reset forward to the session and the button follows the
+  authoritative `state {running}`; the canvas IS the shared world — local stepping + home-instance rendering
+  stop (`WorldSim.setCoop`, early-out in `drawWorld`). (b) snapshots now carry per-bot `samples` (world-space
+  samplePoint/direction, level, effectiveRange, fov, detected) + `motors` (signed forces) + component
+  ids/ranges; `normalizeBot` passes them through; the client overlay draws shared-bot beams/readouts exactly
+  like local instances and accrues paths client-side per snapshot tick (cleared on `state {reset}`). Covered
+  e2e (`coop.session.mjs` BUG9: Play via the UI starts the shared session; one server step proves a bot ON a
+  light reads full scale with firing motors — and that data rides the wire to the client; the bot moves while
+  running, Pause stops the session, Reset reseats + clears trails) and by unit tests (snapshot samples/motors
+  ride the wire; reset marker on the state echo). A wall-pinning e2e design was tried first but is unstable at
+  the test's `thrustScale=2` (~300 px/tick tunnels any matter-js discrete collision), hence the step-level
+  assertions. The smoke itself gained per-eval CDP timeouts, step milestones, and a watchdog so a wedged
+  headless page fails loudly instead of hanging the probe forever.

@@ -132,6 +132,9 @@ async function main() {
         const me = c.you?.name;
         return c.bots.map((b) => ({ ...b, mine: b.owner === me }));
       },
+      // Co-op: Play/Pause/Reset run the SHARED world (server-authoritative); the button label
+      // comes back via the authoritative `state` message (worldSim.setRunning).
+      onSharedControl: (cmd) => coopPanel.client.controls(cmd),
     });
   }
 
@@ -180,20 +183,34 @@ async function main() {
         // later host edits. Remember the home world so we can restore it when the session ends.
         state._localElementsBackup = clone(state.world.elements);
         state.world.elements = clone(c.elements ?? []);
-        worldSim?.buildObstacles();
       }
+      // The World canvas IS the shared world from here on (both roles): stop the local
+      // simulation's stepping/drawing of its home instances; bots ride on snapshots.
+      if (!worldSim) initWorldSim();
+      worldSim.setCoop(true);
+      worldSim.setRunning(c.running); // welcome carries the authoritative running flag
+      worldSim.buildObstacles();
     } else if (msg.type === 'elements' && c.status === 'connected' && c.you?.role !== 'admin') {
       // Mirror the host's edit: replace the local static elements and rebuild obstacle bodies.
       state.world.elements = clone(msg.elements ?? []);
       worldSim?.buildObstacles();
+    } else if (msg.type === 'snapshot') {
+      // Accrue one motion-trail point per bot (Paths toggle reads these client-side).
+      worldSim?.onCoopSnapshot();
+    } else if (msg.type === 'state') {
+      // Authoritative running flag flips the Play/Pause label; reset clears local trails.
+      worldSim?.setRunning(msg.running);
+      if (msg.reset) worldSim?.clearCoopPaths();
     } else if (msg.type === 'closed' || msg.type === 'worldClosed') {
       for (const b of addElementBtns) b.disabled = false; // back to single-player editing
       // Return the participant to their home world (the shared mirror is gone now).
       if (c.you?.role !== 'admin' && state._localElementsBackup) {
         state.world.elements = clone(state._localElementsBackup);
         state._localElementsBackup = null;
-        worldSim?.buildObstacles();
       }
+      // Back to single-player: the local world steps + draws its own instances again.
+      worldSim?.setCoop(false);
+      worldSim?.buildObstacles();
     }
   });
 

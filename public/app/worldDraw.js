@@ -60,6 +60,11 @@ export function drawWorld(sim) {
       }
     }
 
+    // Co-op (M5): while connected, the canvas IS the shared world. Static elements above are
+    // already mirrored from the server, but local instances/paths/readouts/beams would be a
+    // second (frozen) simulation painted over the real one — skip everything instance-driven.
+    if (sim.coopMode) return;
+
     // instances
     for (const inst of sim.instances) {
       const v = sim.vehicleFor(inst);

@@ -88,8 +88,46 @@ test('M5: snapshot carries each mounted component (comps) so thin clients can dr
   assert.ok(Array.isArray(b.comps), 'snapshot bot must include a comps array');
   // seekerDoc mounts a light sensor at (10,0) and a powered wheel at (0,12).
   assert.deepEqual(b.comps,
-    [{ x: 10, y: 0, type: 'light_sensor' }, { x: 0, y: 12, type: 'powered_wheel' }],
+    [{ id: 'sL', x: 10, y: 0, type: 'light_sensor' }, { id: 'wR', x: 0, y: 12, type: 'powered_wheel' }],
     'comps must list each local component with its body-local position and type');
+});
+
+test('M5: snapshot carries sensor samples + motor forces so thin clients draw shared bots like local ones', () => {
+  // Light just ahead of the start: the front sensor must read high, drive its wheel, and BOTH
+  // results must ride the wire — before this the client only got geometry and beams/values/paths
+  // could never render for a deployed vehicle.
+  const { sim } = makeWorld({
+    elements: [{ type: 'light', position: { x: 0, y: 0 }, properties: { intensity: 200 } }],
+    protos: { bot: seekerDoc() },
+  });
+  sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: -60, y: 0, rotation: 0 }, owner: 'alice' });
+  sim.step();
+  const b = JSON.parse(JSON.stringify(sim.snapshot())).bots[0]; // exactly what the transport sends
+  assert.ok(Array.isArray(b.samples) && b.samples.length === 1, 'one light sensor -> one sample');
+  const s = b.samples[0];
+  assert.equal(s.componentId, 'sL');
+  assert.ok(s.value > 0.5, `sensor should read high near the light (got ${s.value})`);
+  assert.ok(s.lightLevel != null && s.lightLevel > 0, 'lightLevel rides the wire for beam brightness');
+  assert.ok(s.effectiveRange > 0 && s.fov > 0, 'effectiveRange + fov ride the wire for the wedge shape');
+  // samplePoint is world-space at the sensor: seed (-60,0) + local (10,0), rotation 0 — allow a
+  // tick or two of drift, since physics steps before sensors sample.
+  assert.ok(Math.abs(s.samplePoint.x - -50) < 3 && Math.abs(s.samplePoint.y) < 2,
+    `samplePoint must be the sensor's world position (got ${JSON.stringify(s.samplePoint)})`);
+  assert.ok(Number.isFinite(s.direction), 'direction rides the wire');
+  assert.ok(Array.isArray(b.motors) && b.motors.length === 1, 'one wired wheel -> one motor reading');
+  assert.equal(b.motors[0].id, 'wR');
+  assert.ok(Math.abs(b.motors[0].force) > 0.5, `wired sensor should produce real force (got ${b.motors[0].force})`);
+});
+
+test('M5: controls echo the authoritative running flag and a reset marker', () => {
+  const { session, p } = makeSession([]);
+  const start = session.handle(p.token, { type: 'controls', command: 'start' });
+  assert.deepEqual({ type: start.type, running: start.running, reset: start.reset }, { type: 'state', running: true, reset: false });
+  const pause = session.handle(p.token, { type: 'controls', command: 'pause' });
+  assert.equal(pause.running, false);
+  const reset = session.handle(p.token, { type: 'controls', command: 'reset' });
+  assert.deepEqual({ running: reset.running, reset: reset.reset }, { running: false, reset: true },
+    'clients need the reset marker to clear client-side state (e.g. accumulated trails)');
 });
 
 test('M0: deploy swaps the running vehicle but preserves each clone\u2019s pose & momentum', () => {

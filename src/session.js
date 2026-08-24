@@ -169,7 +169,8 @@ export class Session {
     else if (cmd === 'reset') this.world.reset();
     else return { type: 'error', error: `unknown command: ${cmd}` };
     this.stats.adminCommands++;
-    const res = { type: 'state', running: this.running };
+    // reset rides along so clients clear client-side state (e.g. accumulated motion trails)
+    const res = { type: 'state', running: this.running, reset: cmd === 'reset' };
     this.broadcast(res);
     return res;
   }

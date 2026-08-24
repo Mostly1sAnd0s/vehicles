@@ -283,8 +283,10 @@ export class HeadlessWorld {
 
   /**
    * Serializable state for broadcast to clients. Carries enough per bot to render it faithfully
-   * (orientation + body size/color) without sending the whole vehicle doc — thin clients only need
-   * geometry, not the sensor/logic graph. Full precision here; the transport rounds on the wire.
+   * without sending the whole vehicle doc: geometry (orientation + body size/color + component
+   * placements) AND the sensor/motor results of the latest step, so thin clients can draw the
+   * same beams, readouts, and forces they would for a local instance. Full precision here; the
+   * transport rounds on the wire.
    */
   snapshot() {
     return {
@@ -296,7 +298,11 @@ export class HeadlessWorld {
           x: i.body.position.x, y: i.body.position.y, angle: i.body.angle,
           vx: i.body.velocity.x, vy: i.body.velocity.y,
           w: v?.body?.width ?? 80, h: v?.body?.height ?? 40, color: v?.body?.color ?? '#cc3333',
-          comps: (v.components ?? []).filter(c => c.local).map(c => ({ x: c.local.x, y: c.local.y, type: c.type })),
+          // range rides along for distance-sensor beams (the sample itself doesn't carry it)
+          comps: (v.components ?? []).filter(c => c.local).map(c => ({ id: c.id, x: c.local.x, y: c.local.y, type: c.type, range: c.props?.range })),
+          // samples already include world-space samplePoint/direction from the server's live pose
+          samples: i.lastSamples ?? [],
+          motors: i.lastMotors ?? [],
         };
       }),
     };

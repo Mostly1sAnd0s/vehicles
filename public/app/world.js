@@ -28,6 +28,10 @@ export class WorldSim {
 
     this.view = { x: 0, y: 0, zoom: 1 };
     this.playing = false;
+    // Co-op (M5): while connected, the World canvas IS the shared world. Local physics then
+    // neither steps nor draws its own instances; everything rides on server snapshots.
+    this.coopMode = false;
+    this.coopPaths = new Map(); // bot.id -> [{x,y}] accumulated client-side from snapshots
     this.beams = true;
     this.selectedElement = null;
     this.selectedInstance = null;   // a running vehicle shown in the inspector (X/Y/Rot)
@@ -312,7 +316,8 @@ export class WorldSim {
   loop() {
     const frame = t => {
       const timeScale = this.timeScale();
-      if (this.playing) {
+      // Single-player only: the shared world is stepped authoritatively on the server.
+      if (this.playing && !this.coopMode) {
         this.acc += Math.min(t - this.lastT, 100) * timeScale;
         while (this.acc >= this.dtMs) {
           this.step();
@@ -402,6 +407,41 @@ export class WorldSim {
     }, { passive: false });
   }
 
+  // ---------------- co-op (M5): the canvas is the shared world ----------------
+  /** Connected (host or joiner): stop local stepping/drawing of home-world instances. */
+  setCoop(on) {
+    if (this.coopMode === !!on) return;
+    this.coopMode = !!on;
+    this.coopPaths.clear();
+    if (this.ui?.btnStep) this.ui.btnStep.disabled = on; // a local single step would mislead
+  }
+
+  /** The server's authoritative running flag also drives the local Play/Pause label. */
+  setRunning(running) {
+    this.playing = !!running;
+    if (this.ui?.btnPlay) this.ui.btnPlay.textContent = this.playing ? '⏸ Pause' : '▶ Play';
+  }
+
+  /** Called per received snapshot: accrue one trail point per bot (paths toggle reads it). */
+  onCoopSnapshot() {
+    if (!this.coopMode) return;
+    const bots = this.hooks?.remoteBots?.() ?? [];
+    const live = new Set();
+    for (const b of bots) {
+      live.add(b.id);
+      let pts = this.coopPaths.get(b.id);
+      if (!pts) { pts = []; this.coopPaths.set(b.id, pts); }
+      const last = pts[pts.length - 1];
+      if (!last || Math.hypot(b.x - last.x, b.y - last.y) > 0.25) {
+        pts.push({ x: b.x, y: b.y });
+        if (pts.length > 2000) pts.shift(); // same cap as the local Paths trail
+      }
+    }
+    for (const id of [...this.coopPaths.keys()]) if (!live.has(id)) this.coopPaths.delete(id);
+  }
+
+  clearCoopPaths() { this.coopPaths.clear(); }
+
   hitElement(w) {
     for (const el of this.worldDoc.elements) {
       const dx = w.x - el.position.x, dy = w.y - el.position.y;
@@ -424,9 +464,19 @@ export class WorldSim {
 
     this.ui.addVehicle.onclick = () => this.addVehicle();
 
-    this.ui.btnPlay.onclick = () => { this.playing = !this.playing; this.ui.btnPlay.textContent = this.playing ? '⏸ Pause' : '▶ Play'; };
-    this.ui.btnStep.onclick = () => this.step();
-    this.ui.btnReset.onclick = () => this.reset();
+    // In co-op mode the sim runs on the server: forward start/pause/reset to the session and let
+    // the authoritative `state` message flip the button (setRunning). Joiners never get here —
+    // the panel hides these buttons for non-admins.
+    this.ui.btnPlay.onclick = () => {
+      if (this.coopMode) { this.hooks?.onSharedControl?.(this.playing ? 'pause' : 'start'); return; }
+      this.playing = !this.playing;
+      this.ui.btnPlay.textContent = this.playing ? '⏸ Pause' : '▶ Play';
+    };
+    this.ui.btnStep.onclick = () => this.step(); // no single-step on the shared world
+    this.ui.btnReset.onclick = () => {
+      if (this.coopMode) { this.hooks?.onSharedControl?.('reset'); this.clearCoopPaths(); return; }
+      this.reset();
+    };
     this.ui.timescale.oninput = e => {
       this.worldDoc.physics.timeScale = Number(e.target.value);
       this.ui.timescaleVal.textContent = Number(e.target.value).toFixed(1) + '×';
@@ -448,9 +498,10 @@ export class WorldSim {
     window.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if (!this.hooks.isWorldTabActive()) return;
+      // Route through the button handlers so co-op mode forwards to the shared session.
       if (kb.playPause === e.code) this.ui.btnPlay.onclick();
-      if (kb.step === e.code) this.step();
-      if (kb.reset === e.code) this.reset();
+      if (kb.step === e.code && !this.coopMode) this.step();
+      if (kb.reset === e.code) this.ui.btnReset.onclick();
       if (kb.toggleBeams === e.code) this.ui.btnBeams.onclick();
     });
   }
@@ -672,6 +723,21 @@ export class WorldSim {
     const bots = this.hooks.remoteBots();
     if (!bots?.length) return;
     const ctx = this.canvas.getContext('2d');
+    // Motion trails UNDER the bodies (Paths toggle), accrued client-side from snapshots.
+    if (this.paths) {
+      for (const b of bots) {
+        const pts = this.coopPaths.get(b.id);
+        if (!pts || pts.length < 2) continue;
+        ctx.beginPath();
+        pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = b.color ?? '#4da3ff'; // the vehicle's own body color, like local trails
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
     const hues = [4, 130, 205, 285, 45, 320];
     bots.forEach((b, i) => {
       ctx.save();
@@ -710,6 +776,127 @@ export class WorldSim {
       ctx.restore();
     });
     ctx.globalAlpha = 1;
+    // Sensor beams + on-body readouts from the server's samples (same toggles as local bots).
+    for (const b of bots) {
+      if (this.beams) this.drawCoopBeams(ctx, b);
+      if (this.showValues) this.drawCoopValues(ctx, b);
+    }
+  }
+
+  /**
+   * Shared-bot sensor beams, mirroring the local renderer's conventions (worldDraw.js): a light
+   * sensor draws a FOV wedge whose length IS its current sensing radius and whose brightness
+   * tracks level; vehicle-detection draws its FOV cone (lit when something is in it); distance
+   * sensors draw a thin full-range ray. The samples already carry world-space samplePoint/direction
+   * computed by the server at the bot's live pose.
+   */
+  drawCoopBeams(ctx, b) {
+    for (const s of b.samples ?? []) {
+      if (!s.samplePoint || s.direction == null) continue;
+      const { x: sx, y: sy } = s.samplePoint;
+      // Light sensor
+      if (s.lightLevel != null && s.effectiveRange != null) {
+        const fov = (s.fov == null || !Number.isFinite(s.fov)) ? 2 * Math.PI : s.fov;
+        const lvl = Math.min(Math.max(s.lightLevel, 0), 1);
+        const reach = s.effectiveRange ?? 0;
+        if (reach <= 0) {
+          ctx.beginPath();
+          ctx.arc(sx, sy, 3, 0, 2 * Math.PI);
+          ctx.strokeStyle = 'rgba(255,180,90,0.25)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          continue;
+        }
+        const half = Math.min(fov / 2, Math.PI);
+        const alpha = 0.06 + 0.8 * lvl;
+        ctx.beginPath();
+        if (half >= Math.PI - 1e-3) {
+          ctx.arc(sx, sy, reach, 0, 2 * Math.PI); // omni: full circle
+        } else {
+          const a1 = s.direction - half, a2 = s.direction + half;
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + Math.cos(a1) * reach, sy + Math.sin(a1) * reach);
+          ctx.arc(sx, sy, reach, a1, a2); // edge -> arc -> other edge = wedge
+        }
+        ctx.closePath();
+        ctx.fillStyle = `rgba(255,180,90,${(alpha * 0.22).toFixed(3)})`;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(255,180,90,${alpha.toFixed(3)})`;
+        ctx.lineWidth = 1 + 1.5 * lvl;
+        ctx.stroke();
+        continue;
+      }
+      // Vehicle-detection sensor: a cone whose aperture IS its FOV
+      if (s.detected !== undefined && s.fov != null) {
+        const range = s.range ?? 150;
+        const half = Math.min(s.fov / 2, Math.PI);
+        ctx.beginPath();
+        if (half >= Math.PI - 1e-3) {
+          ctx.arc(sx, sy, range, 0, 2 * Math.PI);
+        } else {
+          const a1 = s.direction - half, a2 = s.direction + half;
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + Math.cos(a1) * range, sy + Math.sin(a1) * range);
+          ctx.arc(sx, sy, range, a1, a2);
+        }
+        ctx.closePath();
+        ctx.fillStyle = s.detected ? 'rgba(141,255,190,0.18)' : 'rgba(141,255,190,0.06)';
+        ctx.fill();
+        ctx.strokeStyle = s.detected ? 'rgba(141,255,190,0.9)' : 'rgba(141,255,190,0.35)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        continue;
+      }
+      // Distance sensor: thin full-range ray; the component's configured range is per-comp.
+      const comp = (b.comps ?? []).find(c => c.id === s.componentId);
+      const len = comp?.range ?? 150;
+      if (!len) continue;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + Math.cos(s.direction) * len, sy + Math.sin(s.direction) * len);
+      ctx.strokeStyle = 'rgba(140,200,255,0.35)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  /** Shared-bot readouts: world X/Y above the body, level→output per sensor, signed force per wheel. */
+  drawCoopValues(ctx, b) {
+    const label = (x, y, text, color) => {
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = color;
+      ctx.fillText(text, x, y);
+    };
+    label(b.x - 34, b.y - ((b.h ?? 40) / 2 + 12), `x ${Math.round(b.x)}  y ${Math.round(b.y)}`, '#e8f0ff');
+    for (const s of b.samples ?? []) {
+      if (!s.samplePoint) continue;
+      let txt;
+      let col = '#ffd479';
+      if (s.lightLevel != null) {
+        const dTxt = s.lightDistance != null ? ` d\u2248${Math.round(s.lightDistance)}` : '';
+        txt = `L ${s.lightLevel.toFixed(2)}\u2192${s.value.toFixed(2)}${dTxt}`;
+      } else if (s.detected !== undefined) {
+        const dTxt = s.detected && s.detectedDistance != null ? ` d\u2248${Math.round(s.detectedDistance)}` : '';
+        txt = `V ${s.detected ? 1 : 0}${dTxt}`;
+        if (s.detected) col = '#8dffbe';
+      } else {
+        txt = `D ${s.value.toFixed(2)}`;
+      }
+      label(s.samplePoint.x + 8, s.samplePoint.y - 9, txt, col);
+    }
+    for (const m of b.motors ?? []) {
+      if (!m.local) continue;
+      const a = b.angle ?? 0; // component local -> world at the bot's live pose
+      const px = b.x + Math.cos(a) * m.local.x - Math.sin(a) * m.local.y;
+      const py = b.y + Math.sin(a) * m.local.x + Math.cos(a) * m.local.y;
+      const txt = m.force < 0 ? `M -${Math.abs(m.force).toFixed(2)}` : `M +${m.force.toFixed(2)}`;
+      label(px + 8, py + 9, txt, m.force < 0 ? '#ff9d9d' : '#9ad0ff');
+    }
   }
 }
 

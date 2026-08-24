@@ -15,12 +15,39 @@
 const num = (v, d = 0) => (Number.isFinite(v) ? v : d);
 
 /** Fill in defaults so the renderer can rely on every field being present. */
+const optNum = (v) => (v == null || !Number.isFinite(v) ? null : v); // keep "absent" distinct from 0
+
 function normalizeBot(b) {
   return {
     id: b?.id, protoId: b?.protoId, owner: b?.owner ?? null,
     x: num(b?.x), y: num(b?.y), angle: num(b?.angle), vx: num(b?.vx), vy: num(b?.vy),
     w: num(b?.w, 80), h: num(b?.h, 40), color: b?.color ?? '#cc3333',
-    comps: Array.isArray(b?.comps) ? b.comps.map(c => ({ x: num(c?.x), y: num(c?.y), type: c?.type })) : [],
+    comps: Array.isArray(b?.comps)
+      ? b.comps.map(c => ({ id: c?.id, x: num(c?.x), y: num(c?.y), type: c?.type, range: optNum(c?.range) }))
+      : [],
+    // Sensor results from the server's latest step (world-space samplePoint/direction included),
+    // so beams + on-body readouts render identically to a local instance.
+    samples: Array.isArray(b?.samples)
+      ? b.samples.map(s => ({
+          componentId: s?.componentId,
+          value: num(s?.value),
+          lightLevel: optNum(s?.lightLevel),
+          lightDistance: optNum(s?.lightDistance),
+          effectiveRange: optNum(s?.effectiveRange),
+          fov: optNum(s?.fov),
+          detected: !!s?.detected,
+          detectedDistance: optNum(s?.detectedDistance),
+          range: optNum(s?.range),
+          samplePoint: s?.samplePoint ? { x: num(s.samplePoint.x), y: num(s.samplePoint.y) } : null,
+          direction: optNum(s?.direction),
+        }))
+      : [],
+    motors: Array.isArray(b?.motors)
+      ? b.motors.map(m => ({
+          id: m?.id, force: num(m?.force),
+          local: m?.local ? { x: num(m.local.x), y: num(m.local.y) } : null,
+        }))
+      : [],
   };
 }
 
