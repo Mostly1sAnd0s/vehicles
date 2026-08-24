@@ -69,6 +69,13 @@ export class HeadlessWorld {
     }
   }
 
+  /**
+   * Rebuild static obstacle bodies from the current element list. Co-op element sync (setElements/
+   * addElement/moveElement/removeElement) mutates worldDoc.elements after construction — without
+   * this, rocks/walls would never become physics bodies and deployed bots would pass through them.
+   */
+  rebuildObstacles() { this._buildObstacles(); }
+
   _makeBody(v) {
     const M = this.M;
     if (!v?.body) return null;

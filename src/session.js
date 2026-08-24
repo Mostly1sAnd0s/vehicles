@@ -202,6 +202,7 @@ export class Session {
       rotation: Number(e.rotation) || 0, scale: e.scale ?? { x: 1, y: 1 }, properties: e.properties ?? {},
     };
     this._sharedElements().push(el);
+    this.world.rebuildObstacles();
     const res = { type: 'elementAdded', id: el.id, count: this._sharedElements().length };
     this._sendTo(p.token, res); // ack so the host learns the assigned id (handle() only echoes errors)
     this.broadcast({ type: 'elements', elements: this._elementsWire() }); // everyone (incl. sender; admin UI ignores its own echo)
@@ -213,6 +214,7 @@ export class Session {
     const el = this._sharedElements().find(x => x.id === msg?.id);
     if (!el) return { type: 'error', error: `no such element: ${msg?.id}` };
     el.position.x = Math.round(Number(msg?.x)); el.position.y = Math.round(Number(msg?.y));
+    this.world.rebuildObstacles();
     const res = { type: 'elementMoved', id: el.id, x: el.position.x, y: el.position.y };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });
@@ -229,6 +231,7 @@ export class Session {
     const els = Array.isArray(msg?.elements) ? msg.elements : null;
     if (!els) return { type: 'error', error: 'setElements requires an elements array' };
     this.world.worldDoc.elements = els;
+    this.world.rebuildObstacles();
     const res = { type: 'elementsSet', count: els.length };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });
@@ -241,6 +244,7 @@ export class Session {
     const i = els.findIndex(x => x.id === msg?.id);
     if (i < 0) return { type: 'error', error: `no such element: ${msg?.id}` };
     els.splice(i, 1);
+    this.world.rebuildObstacles();
     const res = { type: 'elementRemoved', id: msg.id, count: els.length };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });

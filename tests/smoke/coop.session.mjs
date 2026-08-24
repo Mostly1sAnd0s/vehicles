@@ -110,6 +110,16 @@ try {
   if (await H.ev(visible('coop-gw-row')).then(v => v)) fail('BUG4: host/join row still visible while hosting');
   if (await H.ev(visible('coop-gw-fields')).then(v => v)) fail('BUG4: gateway/name fields still visible while hosting');
 
+  // ---------- BUG 8: the host's pre-loaded world must land ON THE SERVER at host-time -----
+  // main.js seeds the shared world via setElements on welcome; without it the server holds an
+  // empty element list and deployed bots can never sense lights or collide with rocks.
+  let serverEls = [];
+  for (let i = 0; i < 40 && !serverEls.length; i++) {
+    serverEls = gw.worlds.get(code)?.session.world.worldDoc.elements ?? [];
+    if (!serverEls.length) await sleep(100); // setElements is fire-and-forget right after welcome
+  }
+  if (!serverEls.some(e => e.type === 'light')) fail('BUG8: server world has no lights after hosting — local world never crossed the wire: ' + JSON.stringify(serverEls.map(e => e.type)));
+
   // ---------- BUG 1: host edits their design via the co-op flow and deploys ------
   await H.ev(`document.getElementById('coop-edit').click()`);
   await sleep(300);

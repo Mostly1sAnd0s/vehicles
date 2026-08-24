@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import Matter from 'matter-js';
 import { HeadlessWorld } from '../src/simulation/worldSim.js';
+import { Session } from '../src/session.js';
 
 // Test-only config (exaggerated thrust/power so motion is unambiguous in a few
 // ticks — the shipped tuning lives in config/*.json). Shape mirrors the real files.
@@ -103,6 +104,67 @@ test('M0: deploy swaps the running vehicle but preserves each clone\u2019s pose 
   const drift = Math.hypot(inst.body.position.x - before.x, inst.body.position.y - before.y);
   assert.ok(drift < 1e-6, `deploy rebuilt the body in place; pose must not move (drifted ${drift})`);
   assert.ok(Math.abs(inst.body.velocity.x - before.vx) < 1e-6, 'deploy must preserve momentum');
+});
+
+// ---- M5 element sync: elements that arrive AFTER world construction must still be live ----
+// Regression: co-op worlds start empty; the host seeds its whole local element list via
+// setElements, and edits flow through add/move/remove. Before the fix those mutations only
+// touched worldDoc.elements — no light was ever sampled and rocks were never physics bodies,
+// so deployed bots ignored the shared world entirely.
+
+function makeSession(elements = []) {
+  const session = new Session({ Matter, configs, worldDoc: { elements, vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  session.bind(p.token, () => {});
+  return { session, p };
+}
+
+const staticBodies = session => Matter.Composite.allBodies(session.world.engine.world).filter(b => b.isStatic);
+
+test('M5: setElements after construction seeds a light a deployed bot senses and drives toward', () => {
+  const { session, p } = makeSession([]);
+  session.handle(p.token, { type: 'deploy', vehicle: seekerDoc() });
+  // Light sits ~60px ahead of the participant seed (-360,0) — the M0 drive-test geometry — but it
+  // arrives post-construction through the co-op element channel.
+  session.handle(p.token, { type: 'setElements', elements: [{ id: 'l1', type: 'light', primitive: 'circle', position: { x: -300, y: 0 }, rotation: 0, scale: { x: 1, y: 1 }, properties: { intensity: 200 } }] });
+  const inst = session.world.instances[0];
+  const start = { ...inst.body.position };
+  for (let i = 0; i < 150; i++) session.world.step();
+  const moved = Math.hypot(inst.body.position.x - start.x, inst.body.position.y - start.y);
+  assert.ok(moved > 2, `bot should chase the seeded light, moved ${moved}`);
+});
+
+test('M5: setElements after construction makes rocks physical (a bot collides with them)', () => {
+  const { session, p } = makeSession([]);
+  session.handle(p.token, { type: 'setElements', elements: [{ id: 'w1', type: 'obstacle', primitive: 'rect', position: { x: 100, y: 0 }, rotation: 0, scale: { x: 1, y: 1 }, properties: { width: 20, height: 300 } }] });
+  assert.equal(staticBodies(session).length, 1, 'the seeded wall must become a static matter body');
+  session.handle(p.token, { type: 'deploy', vehicle: seekerDoc() });
+  const inst = session.world.instances[0];
+  // No light nearby -> motor ~0; clean initial velocity straight at the wall (M0 wall-test pattern).
+  Matter.Body.setVelocity(inst.body, { x: 6, y: 0 });
+  Matter.Body.setAngularVelocity(inst.body, 0);
+  let maxFront = -Infinity;
+  for (let i = 0; i < 120; i++) { session.world.step(); maxFront = Math.max(maxFront, inst.body.position.x + 40); }
+  assert.ok(maxFront <= 92, `bot front reached ${maxFront.toFixed(1)}; a seeded wall at x=90 should have stopped it`);
+});
+
+test('M5: moveElement / addElement / removeElement keep obstacle bodies in sync', () => {
+  const { session, p } = makeSession([]);
+  session.handle(p.token, { type: 'setElements', elements: [{ id: 'r1', type: 'rock', primitive: 'circle', position: { x: 100, y: 0 }, rotation: 0, scale: { x: 1, y: 1 }, properties: { radius: 40 } }] });
+  const at = (x) => staticBodies(session).some(b => Math.abs(b.position.x - x) < 1);
+  assert.ok(at(100), 'rock body should sit at x=100');
+
+  session.handle(p.token, { type: 'moveElement', id: 'r1', x: 250, y: 0 });
+  assert.equal(staticBodies(session).length, 1, 'moving must not duplicate the body');
+  assert.ok(staticBodies(session)[0].position.x === 250, `rock body should follow the element to x=250 (got ${staticBodies(session)[0].position.x})`);
+
+  session.handle(p.token, { type: 'addElement', element: { id: 'r2', type: 'rock', primitive: 'circle', position: { x: -100, y: 0 }, properties: { radius: 20 } } });
+  assert.equal(staticBodies(session).length, 2, 'added rock must appear as a second static body');
+
+  const res = session.handle(p.token, { type: 'removeElement', id: 'r1' });
+  assert.equal(res.type, 'elementRemoved');
+  assert.equal(staticBodies(session).length, 1, 'removed rock body must be gone');
+  assert.equal(staticBodies(session)[0].position.x, -100);
 });
 
 test('M0: setCount is admin-controlled and adds/removes clones around the survivors', () => {
