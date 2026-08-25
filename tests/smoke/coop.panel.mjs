@@ -133,6 +133,30 @@ try {
     $('remote-fleet').querySelector('button[data-act="plus"]').click();
     await poll(() => /1 bot/.test($('remote-fleet').textContent), 40);
 
+    // REGRESSION: the fleet re-renders at snapshot rate (15 Hz). If renderFleet rebuilt the row DOM
+    // every time, the + button would be destroyed between mousedown and mouseup and the browser
+    // would never fire a real click on it (a host had to spam ~30 clicks before one landed). Hold a
+    // press open across several re-render windows: the SAME node must still be connected.
+    const plusBtn = $('remote-fleet').querySelector('button[data-act="plus"]');
+    plusBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 250)); // ~3–4 snapshot re-renders pass through here
+    if (!plusBtn.isConnected) throw new Error('fleet + button was re-created mid-press (renderFleet must patch in place)');
+    plusBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    plusBtn.click(); // the press survived → the click must count
+    await poll(() => /2 bot/.test($('remote-fleet').textContent), 40);
+    $('remote-fleet').querySelector('button[data-act="minus"]').click(); // back to one for the observer phase
+    await poll(() => /1 bot/.test($('remote-fleet').textContent), 40);
+
+    // Manual fleet size: type an exact number in the row's input and press Enter -> setCount.
+    const countInput = $('remote-fleet').querySelector('.fleet-count-input');
+    if (!countInput) throw new Error('no manual fleet-size input in the host fleet row');
+    countInput.value = '3';
+    countInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await poll(() => /3 bot/.test($('remote-fleet').textContent), 40);
+    countInput.value = '1'; // back to one for the observer phase
+    countInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await poll(() => /1 bot/.test($('remote-fleet').textContent), 40);
+
     // 2d. Phase 3 element sync: open the World tab, add a light from the canvas toolbar…
     $('tab-world').click();
     await poll(() => window.__app().worldSim);

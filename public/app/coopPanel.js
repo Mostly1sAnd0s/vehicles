@@ -78,6 +78,19 @@ export class CoopPanel {
       else if (btn.dataset.act === 'remove') { this.client.setCount(protoId, 0); }
     });
 
+    // Manual fleet size: the host types an exact number in a row's input and presses Enter (or
+    // blurs / clicks away); it goes to setCount clamped 0..MAX_FLEET, same as −/+/✕.
+    const applyFleetCount = (input) => {
+      if (!input || input.dataset.protoId == null) return;
+      const n = Math.max(0, Math.min(MAX_FLEET, Math.trunc(Number(input.value)) || 0));
+      input.value = n; // snap the field to what actually goes over the wire
+      this.client.setCount(input.dataset.protoId, n);
+    };
+    this.ui.remoteFleet.addEventListener('change', (e) => { if (e.target.matches('.fleet-count-input')) applyFleetCount(e.target); });
+    this.ui.remoteFleet.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.matches('.fleet-count-input')) { e.preventDefault(); applyFleetCount(e.target); }
+    });
+
     this.client.onMessage((msg) => {
       const c = this.client;
       if (msg.type === 'welcome') {
@@ -222,27 +235,59 @@ export class CoopPanel {
     if (!el || c.status !== 'connected') return;
     const isAdmin = c.you?.role === 'admin';
     const rows = c.clients.map((p) => ({ ...p, count: c.bots.filter((b) => b.protoId === p.protoId).length }));
-    el.innerHTML = '';
     el.hidden = rows.length === 0;
-    for (const r of rows) {
-      const row = document.createElement('div');
-      row.className = 'fleet-row';
-      row.dataset.protoId = r.protoId ?? '';
-      row.innerHTML =
-        `<span class="fleet-name">${esc(r.name)}</span>` +
-        `<span class="dim fleet-count">${r.count} bot${r.count === 1 ? '' : 's'}${isAdmin && r.protoId !== c.you?.protoId ? ' · other' : ''}</span>`;
-      if (isAdmin && r.protoId) {
-        const mk = (act, label, title, disabled) =>
-          `<button data-act="${act}" data-proto-id="${esc(r.protoId)}" data-count="${r.count}" ${disabled ? 'disabled' : ''} title="${title}">${label}</button>`;
-        row.innerHTML +=
-          `<span class="fleet-btns">` +
-          mk('minus', '−', `Remove one of ${r.name}'s bots`, r.count === 0) +
-          mk('plus', '+', `Add one bot to ${r.name}'s fleet`, r.count >= MAX_FLEET) +
-          mk('remove', '✕', `Remove all of ${r.name}'s bots`, r.count === 0) +
-          `</span>`;
-      }
-      el.appendChild(row);
+    // Rebuild the rows only when membership or role changes; otherwise patch counts/disabled state
+    // IN PLACE. A full innerHTML wipe ran at snapshot rate (15 Hz) and destroyed the −/+/✕ buttons
+    // mid-press, so most real mouse clicks were swallowed before the delegated handler saw them
+    // (a click only registers when mousedown+mouseup hit the same element) — hosts had to spam the
+    // buttons for seconds before one went through. Programmatic .click() in the smoke tests never
+    // exposed this because it dispatches synchronously.
+    const key = (isAdmin ? 'A' : '') + ':' + rows.map((r) => r.protoId ?? '').join(',');
+    if (key !== this._fleetKey) {
+      this._fleetKey = key;
+      el.innerHTML = '';
+      for (const r of rows) el.appendChild(this._makeFleetRow(r, isAdmin, c.you?.protoId));
+      return;
     }
+    const live = new Map(Array.from(el.querySelectorAll('.fleet-row')).map((row) => [row.dataset.protoId, row]));
+    for (const r of rows) {
+      const row = live.get(r.protoId ?? '');
+      if (!row) continue; // membership changed → next call rebuilds
+      row.querySelector('.fleet-count').textContent =
+        `${r.count} bot${r.count === 1 ? '' : 's'}${isAdmin && r.protoId !== c.you?.protoId ? ' · other' : ''}`;
+      const input = row.querySelector('.fleet-count-input');
+      if (input && document.activeElement !== input) input.value = r.count; // never clobber a half-typed number
+      for (const act of ['minus', 'plus', 'remove']) {
+        const b = row.querySelector(`button[data-act="${act}"]`);
+        if (!b) continue;
+        b.dataset.count = r.count;
+        b.disabled = act === 'plus' ? r.count >= MAX_FLEET : r.count === 0;
+      }
+    }
+  }
+
+  /** One fleet row (host gets −/+/✕); stable DOM so renderFleet can patch it without stealing clicks. */
+  _makeFleetRow(r, isAdmin, myProtoId) {
+    const row = document.createElement('div');
+    row.className = 'fleet-row';
+    row.dataset.protoId = r.protoId ?? '';
+    row.innerHTML =
+      `<span class="fleet-name">${esc(r.name)}</span>` +
+      `<span class="dim fleet-count">${r.count} bot${r.count === 1 ? '' : 's'}${isAdmin && r.protoId !== myProtoId ? ' · other' : ''}</span>`;
+    if (isAdmin && r.protoId) {
+      const mk = (act, label, title, disabled) =>
+        `<button data-act="${act}" data-proto-id="${esc(r.protoId)}" data-count="${r.count}" ${disabled ? 'disabled' : ''} title="${title}">${label}</button>`;
+      row.innerHTML +=
+        `<span class="fleet-btns">` +
+        mk('minus', '−', `Remove one of ${r.name}'s bots`, r.count === 0) +
+        `<input class="fleet-count-input" type="number" min="0" max="${MAX_FLEET}" step="1" value="${r.count}"` +
+        ` data-proto-id="${esc(r.protoId)}" aria-label="Fleet size for ${esc(r.name)}"` +
+        ` title="Type the exact number of bots, press Enter">` +
+        mk('plus', '+', `Add one bot to ${r.name}'s fleet`, r.count >= MAX_FLEET) +
+        mk('remove', '✕', `Remove all of ${r.name}'s bots`, r.count === 0) +
+        `</span>`;
+    }
+    return row;
   }
 }
 

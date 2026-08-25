@@ -103,6 +103,8 @@ main { flex: 1; min-height: 0; display: flex; }
 .fleet-btns { display: flex; gap: 3px; margin-left: auto; }
 .fleet-btns button { padding: 2px 9px; font-size: 12px; line-height: 16px; cursor: pointer; }
 .fleet-btns button:disabled { opacity: .4; cursor: default; }
+.fleet-count-input { width: 44px; padding: 1px 3px; font-size: 12px; text-align: center; }
+.fleet-count-input:focus { outline: 1px solid var(--accent, #4da3ff); }
 #palette button, #world-side > button { width: 100%; margin: 3px 0; text-align: left; }
 #palette button.placing { border-color: var(--accent); background: rgba(77,163,255,.15); }
 
