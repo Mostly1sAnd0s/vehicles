@@ -116,6 +116,8 @@ try {
     // 2b. Phase 3: deploy the current design -> it lands in the shared fleet list.
     // Click ONCE then poll: each click resets the status to "deploying…", so re-clicking inside
     // the poll would race the settled "deployed…" state and never observe it.
+    // Give the editor's body a distinctive palette color first: the deployed bot must adopt it.
+    window.__app().state.vehicle.body.color = '#be4bdb';
     $('coop-deploy').click();
     try { await poll(() => /deployed —/.test($('coop-gw-status').textContent), 40); }
     catch { throw new Error('deploy never acked: status=' + $('coop-gw-status').textContent); }
@@ -173,16 +175,19 @@ try {
     await sleep(400);
     if (/^⚠/.test($('coop-gw-status').textContent)) throw new Error('server refused an element edit: ' + $('coop-gw-status').textContent);
 
-    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, addedEl: { id: el0.id, type: el0.type, x: el0.position.x, y: el0.position.y } });
+    // The shared bot's wire color must be the editor's body color (snapshot carries body.color).
+    const botColor = await poll(() => window.__app().coopPanel.client.bots[0]?.color ?? null, 40);
+    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, botColor, addedEl: { id: el0.id, type: el0.type, x: el0.position.x, y: el0.position.y } });
   })()`));
 
-  const { layout, code, hosted, deployedStatus, fleetText, addedEl } = resultA;
+  const { layout, code, hosted, deployedStatus, fleetText, botColor, addedEl } = resultA;
   if (!layout.sideHasCoop) fail('no Co-op section in the World sidebar: ' + JSON.stringify(layout));
   if (layout.noTab === false) fail('standalone Co-op tab still present');
   if (!/^[A-Z0-9]{6}$/.test(code ?? '')) fail('host did not reveal a 6-char code: ' + code);
   if (!hosted.rowHidden || !hosted.disconnectShown) fail('layout did not swap to Disconnect on host: ' + JSON.stringify(hosted));
   if (!/\b1 client\b/.test(hosted.status)) fail('host status missing the live client count: ' + hosted.status);
   if (!/deployed — 1 bot/.test(deployedStatus ?? '')) fail('deploy ack never surfaced: ' + deployedStatus);
+  if (botColor !== '#be4bdb') fail('deployed bot did not adopt the editor body color: got ' + botColor);
   if (!/1 bot/.test(fleetText ?? '')) fail('fleet list did not settle at 1 bot after +/-/✕: ' + fleetText);
 
   // Node-side observer joins the hosted world: its welcome must contain the light the SPA added

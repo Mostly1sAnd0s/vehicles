@@ -11,6 +11,7 @@ import { findInstanceAt, componentSize } from '../src/models/hitTest.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
+import { lightenHex, DEFAULT_BODY_COLOR } from './color.js';
 
 // Matter.js is loaded as a classic script (public/vendor/matter.min.js)
 const M = globalThis.Matter;
@@ -738,15 +739,18 @@ export class WorldSim {
       }
       ctx.globalAlpha = 1;
     }
-    const hues = [4, 130, 205, 285, 45, 320];
-    bots.forEach((b, i) => {
+    bots.forEach((b) => {
       ctx.save();
       ctx.translate(b.x, b.y);
       ctx.rotate(b.angle ?? 0);
+      // The body IS the vehicle's editor color: the server snapshot carries body.color (set in
+      // the editor's swatch palette), so a shared bot reads exactly like its local twin. Mine
+      // vs others is told by alpha, not hue.
+      const bodyColor = b.color ?? DEFAULT_BODY_COLOR;
       ctx.globalAlpha = b.mine ? 1 : 0.85;
-      ctx.fillStyle = `hsl(${hues[i % hues.length]}, 70%, ${b.mine ? 62 : 46}%)`;
-      ctx.strokeStyle = 'rgba(255,255,255,.75)';
-      ctx.lineWidth = 1.5 / this.view.zoom;
+      ctx.fillStyle = bodyColor;
+      ctx.strokeStyle = lightenHex(bodyColor);
+      ctx.lineWidth = 2 / this.view.zoom;
       ctx.beginPath();
       ctx.rect(-(b.w ?? 80) / 2, -(b.h ?? 40) / 2, b.w ?? 80, b.h ?? 40);
       ctx.fill();
