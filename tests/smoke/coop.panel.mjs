@@ -177,10 +177,24 @@ try {
 
     // The shared bot's wire color must be the editor's body color (snapshot carries body.color).
     const botColor = await poll(() => window.__app().coopPanel.client.bots[0]?.color ?? null, 40);
-    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, botColor, addedEl: { id: el0.id, type: el0.type, x: el0.position.x, y: el0.position.y } });
+
+    // …and the PAINTED body must actually show it. Regression: the coop component loop appended
+    // its rects to the path that still held the body rect, so the first wheel's fill() repainted
+    // the whole body in the fixed actuator blue on top of the editor color ("bots all look
+    // blue, only the outline matches"). Center the camera on the bot, force a frame, and read
+    // the body-center pixel (no component sits at local (0,0)).
+    const sim = window.__app().worldSim;
+    const rb = sim.hooks.remoteBots()[0];
+    sim.view.x = rb.x; sim.view.y = rb.y;
+    sim.draw(); // headless rAF may be throttled
+    const cx = sim.canvas.width / 2 | 0, cy = sim.canvas.height / 2 | 0;
+    const pp = sim.canvas.getContext('2d').getImageData(cx, cy, 1, 1).data;
+    const isMagenta = pp[0] > 140 && pp[2] > 140 && pp[1] < 130; // #be4bdb signature (blended ok)
+    const bodyPixel = [pp[0], pp[1], pp[2]];
+    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, botColor, bodyPixel, isMagenta, addedEl: { id: el0.id, type: el0.type, x: el0.position.x, y: el0.position.y } });
   })()`));
 
-  const { layout, code, hosted, deployedStatus, fleetText, botColor, addedEl } = resultA;
+  const { layout, code, hosted, deployedStatus, fleetText, botColor, bodyPixel, isMagenta, addedEl } = resultA;
   if (!layout.sideHasCoop) fail('no Co-op section in the World sidebar: ' + JSON.stringify(layout));
   if (layout.noTab === false) fail('standalone Co-op tab still present');
   if (!/^[A-Z0-9]{6}$/.test(code ?? '')) fail('host did not reveal a 6-char code: ' + code);
@@ -188,6 +202,7 @@ try {
   if (!/\b1 client\b/.test(hosted.status)) fail('host status missing the live client count: ' + hosted.status);
   if (!/deployed — 1 bot/.test(deployedStatus ?? '')) fail('deploy ack never surfaced: ' + deployedStatus);
   if (botColor !== '#be4bdb') fail('deployed bot did not adopt the editor body color: got ' + botColor);
+  if (!isMagenta) fail('painted body pixel is not the editor color (component overpaint regression?): got rgb(' + (bodyPixel ?? []).join(',') + ')');
   if (!/1 bot/.test(fleetText ?? '')) fail('fleet list did not settle at 1 bot after +/-/✕: ' + fleetText);
 
   // Node-side observer joins the hosted world: its welcome must contain the light the SPA added

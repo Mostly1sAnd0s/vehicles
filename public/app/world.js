@@ -763,6 +763,10 @@ export class WorldSim {
           const s = componentSize({ local: { x: comp.x, y: comp.y } }, def);
           ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
           if (s.kind === 'rect') {
+            // beginPath FIRST: without it the component rect is APPENDED to the path that still
+            // holds the body rect, and fill() repaints the whole body in the component color on
+            // top of the vehicle's editor color (the bug behind "co-op bots all look blue").
+            ctx.beginPath();
             ctx.save();
             ctx.translate(comp.x, comp.y);
             ctx.rect(-s.along / 2, -s.lateral / 2, s.along, s.lateral);
