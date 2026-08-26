@@ -20,11 +20,12 @@
   </nav>
   <div class="spacer"></div>
   <select id="recent-select" title="Recent files"><option value="">Recents…</option></select>
-  <button id="import-vehicle" title="Import a vehicle JSON file">⤓ Vehicle</button>
-  <button id="export-vehicle" title="Download the current vehicle as JSON">⤒ Vehicle</button>
+  <!-- Lucide icons (inline SVG, ISC): upload = load a file in, download = save one out. -->
+  <button id="import-vehicle" title="Load a vehicle JSON file"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><path d="M12 15V3"/></svg></button>
+  <button id="export-vehicle" title="Download the current vehicle as JSON"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/></svg></button>
   <!-- World load/save only makes sense on the World page; hidden while editing. -->
-  <button id="import-world" title="Import a world JSON file" hidden>⤓ World</button>
-  <button id="export-world" title="Download the current world as JSON" hidden>⤒ World</button>
+  <button id="import-world" title="Load a world JSON file" hidden><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><path d="M12 15V3"/></svg></button>
+  <button id="export-world" title="Download the current world as JSON" hidden><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/></svg></button>
   <input type="file" id="file-input" accept=".json" hidden>
 </header>
 
@@ -77,25 +78,33 @@
       <!-- Co-op (M5): one gateway hosts many coded worlds. Host a fresh world to share its code,
            or join an existing one — this client's bots are added to that shared world. -->
       <div class="side-pane" id="side-pane-coop" hidden>
+        <!-- Design controls sit above the Co-op section: visible before connecting too, and
+             Deploy stays greyed out (disabled) until the client has joined/hosted a world. -->
+        <h3>Vehicles</h3>
+        <div class="coop-gw-row coop-design-row">
+          <button id="coop-edit" title="Open the editor on your co-op design">Edit my design</button>
+          <button id="coop-deploy" disabled title="Push your current design into the shared world — you drive your own bots only">Deploy design</button>
+        </div>
+        <!-- Shared fleet (M5 p3–4): other participants' deployed vehicles, add/remove for the host -->
+        <div id="remote-fleet" hidden></div>
         <h3>Co-op</h3>
         <div id="coop-gw-fields">
           <label>Gateway<input type="text" id="coop-gw-url" spellcheck="false" placeholder="ws://127.0.0.1:8090"></label>
           <label>Name<input type="text" id="coop-gw-name" maxlength="24" placeholder="you"></label>
         </div>
-        <div class="coop-gw-row" id="coop-gw-row">
+        <!-- Host on its own row above the Join row; both hide together once connected.
+             The join code field takes the remaining width of the column. -->
+        <div id="coop-gw-row">
           <button id="coop-host" title="Create a new shared world and show its join code">Host</button>
-          <input type="text" id="coop-join-code" maxlength="6" spellcheck="false" placeholder="code">
-          <button id="coop-join" title="Join the shared world with that code">Join</button>
+          <div class="coop-gw-row coop-join-row">
+            <input type="text" id="coop-join-code" maxlength="6" spellcheck="false" placeholder="code">
+            <button id="coop-join" title="Join the shared world with that code">Join</button>
+          </div>
         </div>
         <button id="coop-disconnect" hidden>Disconnect</button>
-        <div class="coop-gw-row">
-          <button id="coop-edit" hidden title="Open the editor on your co-op design">✎ Edit my design</button>
-          <button id="coop-deploy" hidden title="Push your current design into the shared world — you drive your own bots only">Deploy design</button>
-        </div>
         <div id="coop-gw-code" class="coop-code" hidden></div>
+        <h3>Status</h3>
         <div id="coop-gw-status" class="dim">not in a shared world</div>
-        <!-- Shared fleet (M5 p3–4): other participants' deployed vehicles, add/remove for the host -->
-        <div id="remote-fleet" hidden></div>
       </div>
       <div class="pane-footer">Designed by Adam Kemp, 2026</div>
     </aside>

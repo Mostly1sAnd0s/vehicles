@@ -34,6 +34,8 @@ body {
 
 /* Contextual top-bar controls: hidden per active tab (see main.js activate()). */
 #topbar > [hidden] { display: none !important; }
+/* Lucide icons in the top bar (upload/download): sized to sit on the button's baseline. */
+#topbar button svg { width: 15px; height: 15px; vertical-align: -3px; }
 
 button, select, input[type="number"], input[type="range"] {
   background: var(--panel2);
@@ -82,16 +84,27 @@ main { flex: 1; min-height: 0; display: flex; }
   padding-top: 12px;
   color: var(--dim);
   font-size: 11px;
+  text-align: center;
 }
 #editor-inspector { border-right: none; border-left: 1px solid var(--line); }
 .side h3 { margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
 
 .dim { color: var(--dim); }
 /* Co-op controls now live in their own side pane; keep the gateway fields tidy at that width. */
-#side-pane-coop #coop-gw-fields label { display: block; margin: 3px 0; }
+/* Gateway/Name fields: consistent spacing between the two, inputs span the column. */
+#side-pane-coop #coop-gw-fields label { display: block; margin: 8px 0; }
+#side-pane-coop #coop-gw-fields input { display: block; width: 100%; box-sizing: border-box; margin-top: 3px; }
 /* Co-op sidebar section (M5): Host / Join row, big world code, live status line */
-#world-side .coop-gw-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
-#coop-gw-row[hidden] { display: none; }
+/* width:100% for the same shrink-to-fit reason as .side-tabs above. */
+#world-side .coop-gw-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; width: 100%; }
+#world-side #coop-gw-row[hidden] { display: none; } /* must outrank the flex rule below */
+/* Host sits on its own row above the Join row (both live inside #coop-gw-row, hidden together). */
+#world-side #coop-gw-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 4px 0; }
+/* The join code field takes the remaining width of the column. */
+#world-side .coop-join-row { align-items: center; }
+#world-side .coop-join-row #coop-join-code { flex: 1 1 0; min-width: 0; }
+/* Design buttons (Edit my design / Deploy design) split the column width evenly. */
+#world-side .coop-design-row button { flex: 1 1 0; min-width: 0; }
 #world-side #coop-join-code { flex: 1; min-width: 0; width: 100%; box-sizing: border-box; text-transform: uppercase; font-family: monospace; letter-spacing: 2px; }
 #world-side .coop-code { font-family: monospace; font-size: 22px; letter-spacing: 6px; text-align: center; padding: 6px 0; margin: 4px 0; color: inherit; }
 #coop-gw-status { min-height: 15px; margin: 4px 0 8px; }
@@ -110,10 +123,12 @@ main { flex: 1; min-height: 0; display: flex; }
 #palette button, #world-side .side-pane > button { width: 100%; margin: 3px 0; text-align: left; }
 
 /* World sidebar tabs (Sandbox / Co-Op): split the single-player and shared-world controls so the
-   user only ever sees the buttons/options for the mode they are in. -->
-.side-tabs { display: flex; gap: 4px; margin-bottom: 2px; }
+   user only ever sees the buttons/options for the mode they are in. */
+.side-tabs { display: flex; gap: 4px; margin-bottom: 2px; width: 100%; }
+/* The .side column shrink-to-fits its content, so the tab bar needs an explicit width or
+   flex:1 tabs only split whatever space their labels ask for (Sandbox ≠ Co-Op widths). */
 .side-tab {
-  flex: 1; padding: 5px 6px; font-size: 12px; letter-spacing: .3px; text-transform: capitalize;
+  flex: 1 1 0; min-width: 0; padding: 5px 6px; font-size: 12px; letter-spacing: .3px; text-transform: capitalize;
   cursor: pointer; opacity: 1;
 }
 .side-tab.active { background: var(--accent); color: #08111c; border-color: var(--accent); }

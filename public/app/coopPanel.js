@@ -98,8 +98,8 @@ export class CoopPanel {
     this.client.onMessage((msg) => {
       const c = this.client;
       if (msg.type === 'welcome') {
-        this.ui.deploy.hidden = false;
-        if (this.ui.editDesign) this.ui.editDesign.hidden = false;
+        // Both design buttons are always visible now; welcome is what un-greys Deploy.
+        this.ui.deploy.disabled = false;
         this.renderFleet();
       } else if (msg.type === 'roster') {
         // membership changed — refresh the client count; do NOT run this on snapshots, or the
@@ -197,7 +197,7 @@ export class CoopPanel {
     this.ui.row.hidden = on;
     this.ui.disconnect.hidden = !on;
     this.ui.code.hidden = !on;
-    this.ui.deploy.hidden = !on;
+    this.ui.deploy.disabled = !on; // grey out until a world is actually joined/hosted
     if (!on) {
       this.ui.remoteFleet.hidden = true;
       this.ui.remoteFleet.innerHTML = '';

@@ -82,6 +82,11 @@ try {
       $('mode-coop').click();
       rec.coopTab = { coopActive: $('mode-coop').classList.contains('active'), sandboxPaneHidden: $('side-pane-sandbox').hidden,
         coopPaneShown: !$('side-pane-coop').hidden };
+      // Design buttons sit above the Co-op section, visible before connecting; Deploy is greyed
+      // out until a world is actually joined/hosted. Host sits on its own row above the Join row.
+      const hostR = $('coop-host').getBoundingClientRect(), joinR = document.querySelector('.coop-join-row').getBoundingClientRect();
+      rec.designRow = { editShown: !$('coop-edit').hidden, deployShown: !$('coop-deploy').hidden,
+        deployDisabled: $('coop-deploy').disabled, hostAboveJoin: hostR.bottom <= joinR.top + 1 };
       // Host: the world clears to "Joining world…" then the shared world appears; Sandbox is disabled.
       $('coop-gw-url').value = 'ws://127.0.0.1:${GW_PORT}'; $('coop-gw-name').value = 'tabchk';
       $('coop-host').click();
@@ -89,7 +94,8 @@ try {
       rec.joiningOverlay = { shown: !$('world-transition').hidden, msg: $('world-transition-msg').textContent };
       await poll(() => !$('coop-gw-code').hidden ? true : null); // welcome received
       rec.connected = { sandboxDisabled: $('mode-sandbox').disabled, coopPaneShown: !$('side-pane-coop').hidden,
-        sandboxPaneHidden: $('side-pane-sandbox').hidden, disconnectShown: !$('coop-disconnect').hidden };
+        sandboxPaneHidden: $('side-pane-sandbox').hidden, disconnectShown: !$('coop-disconnect').hidden,
+        deployEnabled: !$('coop-deploy').disabled };
       await poll(() => $('world-transition').hidden ? true : null); // overlay lifts after its min time
       rec.overlayLifted = $('world-transition').hidden;
       // A disabled Sandbox tab must not be reselectable.
@@ -114,8 +120,9 @@ try {
   const checks = [
     ['default: Sandbox active, its pane shown, Co-Op pane hidden', d.sandboxActive && d.sandboxPaneShown && d.coopPaneHidden && d.sandboxEnabled],
     ['Co-Op tab swaps panes (Sandbox hidden, Co-Op shown)', c.coopActive && c.sandboxPaneHidden && c.coopPaneShown],
+    ['design buttons visible pre-connect; Deploy greyed out; Host above Join', out.designRow.editShown && out.designRow.deployShown && out.designRow.deployDisabled && out.designRow.hostAboveJoin],
     ['Host shows a "Joining world…" overlay', out.joiningOverlay.shown && /Joining world/i.test(out.joiningOverlay.msg)],
-    ['connected: Sandbox disabled + co-op world shown (Disconnect visible)', out.connected.sandboxDisabled && out.connected.coopPaneShown && out.connected.sandboxPaneHidden && out.connected.disconnectShown],
+    ['connected: Sandbox disabled + co-op world shown (Disconnect visible, Deploy enabled)', out.connected.sandboxDisabled && out.connected.coopPaneShown && out.connected.sandboxPaneHidden && out.connected.disconnectShown && out.connected.deployEnabled],
     ['overlay lifts once the shared world is live', out.overlayLifted === true],
     ['disabled Sandbox tab cannot be reselected', out.disabledNoSwitch.sandboxPaneStillHidden && out.disabledNoSwitch.coopPaneStillShown],
     ['Disconnect shows a "Leaving world…" overlay', out.leavingOverlay.shown && /Leaving world/i.test(out.leavingOverlay.msg)],

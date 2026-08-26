@@ -747,3 +747,19 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   element drag verified on the joiner's mirror **mid-drag with the button still down** (pre-fix this
   was empty), then host/joiner within 3px after release; host bot popup `wi-ix` follows the cursor live
   through a drag. Unit suite **246/246**; all 7 browser smokes green (+ `coop.session.mjs`).
+
+- [x] **World sidebar UI polish (M5).** Small layout/affordance fixes in the World left column:
+  Sandbox / Co-Op tabs now split the column evenly — the root cause was a **pre-existing broken CSS
+  comment** (`-->` instead of `*/`) in `style.css` that silently swallowed the `.side-tabs{display:flex}`
+  rule, so the tab bar fell back to block layout and sized to its labels. Closing it restores equal
+  `flex:1` tabs (also added `width:100%` + `min-width:0` since `.side` shrink-to-fits). "Designed by
+  Adam Kemp, 2026" footer is centred (`.pane-footer{text-align:center}`). Top-bar Load/Download buttons
+  drop the ⤓/⤒ text glyphs for inline **Lucide** icons (ISC, no runtime dep): `upload` = load a file in,
+  `download` = save one out (vehicle + world pairs). Co-op pane: Gateway/Name fields get consistent 8px
+  spacing and full-width inputs; **Host** moves to its own row above the Join row (code field still takes
+  the remaining width); both stay inside `#coop-gw-row` so they hide together on connect (the new flex
+  rule needed a higher-specificity `[hidden]` override). "Edit my design" + "Deploy design" now sit
+  **above** the Co-Op section, always visible, and split the column width; **Deploy stays `disabled`
+  until a world is actually joined/hosted** (`coopPanel.setConnectedLayout`/welcome flip `disabled`, not
+  `hidden`). Covered in `world.tabs.mjs` (design buttons visible pre-connect + Deploy greyed + enabled
+  on connect; Host above Join). Unit **246/246**; all 7 browser smokes green.
