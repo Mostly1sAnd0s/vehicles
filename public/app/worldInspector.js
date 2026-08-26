@@ -7,6 +7,33 @@ export function renderWorldInspector(sim) {
     // A running vehicle takes the inspector over an element: show + edit its live
     // pose (X/Y/Rot), exactly like a selected light/rock/wall.
     if (sim.selectedInstance && !sim.instances.includes(sim.selectedInstance)) sim.selectedInstance = null;
+
+    // Co-op (M5 p3): a selected SHARED bot shows the same X/Y/Rot popup. Its pose comes from the
+    // latest server snapshot; an edit sends an authoritative moveBot command (host-only — the
+    // server is the backstop). The selection clears itself if the bot leaves the world.
+    const remoteBots = sim.hooks?.remoteBots?.() ?? [];
+    if (sim.selectedRemoteBot && !remoteBots.some(b => b.id === sim.selectedRemoteBot.id)) sim.selectedRemoteBot = null;
+    const rb = sim.selectedRemoteBot ? remoteBots.find(b => b.id === sim.selectedRemoteBot.id) : null;
+    if (rb) {
+      const canEdit = !!sim.hooks?.isCoopAdmin?.();
+      box.style.display = 'block';
+      box.innerHTML = `
+        <h3 style="margin:0 0 6px">Shared bot${rb.owner ? ` · ${rb.owner}` : ''}${canEdit ? '' : ' (read-only)'}</h3>
+        <label>X <input type="number" id="wi-ix" value="${Math.round(rb.x)}" ${canEdit ? '' : 'disabled'}></label>
+        <label>Y <input type="number" id="wi-iy" value="${Math.round(rb.y)}" ${canEdit ? '' : 'disabled'}></label>
+        <label>Rot&deg; <input type="number" id="wi-ir" step="5" value="${Math.round((rb.angle ?? 0) * 180 / Math.PI)}" ${canEdit ? '' : 'disabled'}></label>`;
+      if (canEdit) {
+        const apply = () => sim.hooks?.onBotChange?.({
+          id: rb.id,
+          x: Number(box.querySelector('#wi-ix').value),
+          y: Number(box.querySelector('#wi-iy').value),
+          rot: Number(box.querySelector('#wi-ir').value) * Math.PI / 180,
+        });
+        for (const id of ['wi-ix', 'wi-iy', 'wi-ir']) box.querySelector('#' + id).addEventListener('change', apply);
+      }
+      return;
+    }
+
     const inst = sim.selectedInstance;
     if (inst && inst.body) {
       const proto = sim.worldDoc.vehiclePrototypes.find(p => p.id === inst.protoId);

@@ -216,3 +216,43 @@ test('M0: setCount is admin-controlled and adds/removes clones around the surviv
   assert.equal(first.body, sim.instancesFor('bot')[0].body, 'the original clone must survive the trim');
   assert.deepEqual({ x: first.body.position.x, y: first.body.position.y }, survivorPose, 'survivor pose is untouched by setCount');
 });
+
+test('M5: moveBot repositions a shared bot, zeroes its momentum, and adopts the dropped pose as its seed', () => {
+  const { sim } = makeWorld({ protos: { bot: seekerDoc() } });
+  const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: -60, y: 0, rotation: 0 }, owner: 'alice' });
+  // Give it momentum so we can prove moveBot cancels it (a flung bot would drift after the drop).
+  Matter.Body.setVelocity(inst.body, { x: 8, y: -4 });
+  Matter.Body.setAngularVelocity(inst.body, 0.2);
+
+  const ok = sim.moveBot('bot#1', 150, -35);
+  assert.equal(ok, true, 'moveBot should find and move the instance');
+  assert.ok(Math.abs(inst.body.position.x - 150) < 1e-6, `x should be set to 150 (got ${inst.body.position.x})`);
+  assert.ok(Math.abs(inst.body.position.y - (-35)) < 1e-6, `y should be set to -35 (got ${inst.body.position.y})`);
+  assert.equal(inst.body.velocity.x, 0, 'linear momentum must be zeroed on x');
+  assert.equal(inst.body.velocity.y, 0, 'linear momentum must be zeroed on y');
+  assert.equal(inst.body.angularVelocity, 0, 'angular momentum must be zeroed');
+  // Seed adopts the dropped pose so a later reset() restores it there (host-drag parity).
+  assert.ok(Math.abs(inst.seed.x - 150) < 1e-6 && Math.abs(inst.seed.y - (-35)) < 1e-6, 'seed must adopt the dropped pose');
+  // The authoritative snapshot reflects the new pose (this is what every client renders).
+  const b = sim.snapshot().bots[0];
+  assert.ok(Math.abs(b.x - 150) < 1e-6 && Math.abs(b.y - (-35)) < 1e-6, 'snapshot bot must carry the moved pose');
+});
+
+test('M5: moveBot on an unknown id is a no-op (returns false, no crash)', () => {
+  const { sim } = makeWorld({ protos: { bot: seekerDoc() } });
+  sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: 0, y: 0, rotation: 0 } });
+  assert.equal(sim.moveBot('nope', 10, 10), false, 'unknown id returns false');
+});
+
+test('M5: moveBot applies an explicit rotation (inspector Rot field) and seeds it for reset parity', () => {
+  const { sim } = makeWorld({ protos: { bot: seekerDoc() } });
+  const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: 0, y: 0, rotation: 0 }, owner: 'alice' });
+
+  assert.equal(sim.moveBot('bot#1', 40, -25, Math.PI / 2), true);
+  assert.ok(Math.abs(inst.body.angle - Math.PI / 2) < 1e-9, 'body angle must be set');
+  assert.ok(Math.abs(inst.seed.rotation - Math.PI / 2) < 1e-9, 'seed rotation must adopt the new pose (reset parity)');
+
+  // Omitting rot must leave the heading untouched.
+  sim.moveBot('bot#1', 50, 30);
+  assert.ok(Math.abs(inst.body.angle - Math.PI / 2) < 1e-9, 'omitting rot must not change the angle');
+});

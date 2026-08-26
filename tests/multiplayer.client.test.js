@@ -117,6 +117,43 @@ test('M3: participant deploy (ownership isolation) + admin reset restores every 
   }
 });
 
+test('M5: host moveBot repositions a shared bot over the wire; a participant is refused', async () => {
+  const gw = createCoopGateway({ Matter, configs });
+  const { url } = await gw.start();
+  const alice = new CoopClient(); // host -> admin
+  const bob = new CoopClient();   // joiner -> participant
+  try {
+    await alice.connect(url, 'alice', { mode: 'host' });
+    assert.equal(alice.you.role, 'admin');
+    alice.deploy(seekerDoc());
+    await waitFor(() => alice.bots.length === 1, 2000, "alice's bot to appear in a snapshot");
+
+    await bob.connect(url, 'bob', { mode: 'join', code: alice.code });
+    assert.equal(bob.you.role, 'participant');
+    await waitFor(() => bob.bots.length === 1, 2000, 'bob to see the shared bot');
+    const botId = bob.bots[0].id;
+
+    // The sim is paused (no admin start), so a bot only moves when someone repositions it.
+    // A participant's moveBot is refused over the wire — the server is the backstop, not just the UI.
+    let rej = null;
+    bob.onMessage((m) => { if (m.type === 'error' && /host|admin/i.test(m.error ?? '')) rej = m; });
+    bob.moveBot(botId, 500, 300);
+    await waitFor(() => rej, 1500, 'participant moveBot refusal over the wire');
+
+    // The host's moveBot lands the bot at the new pose; the OTHER participant sees it in a snapshot.
+    alice.moveBot(botId, 500, 300);
+    await waitFor(
+      () => { const b = bob.bots.find((x) => x.id === botId); return b && Math.abs(b.x - 500) < 1 && Math.abs(b.y - 300) < 1; },
+      2500, 'the other participant to observe the host-repositioned bot',
+    );
+    const seen = bob.bots.find((x) => x.id === botId);
+    assert.ok(Math.abs(seen.x - 500) < 1 && Math.abs(seen.y - 300) < 1, 'host moveBot must propagate to every participant');
+  } finally {
+    alice.close(); bob.close();
+    await gw.close();
+  }
+});
+
 function seekerDoc() {
   return {
     body: { shape: 'rect', width: 80, height: 40, color: '#3aa0c0' },

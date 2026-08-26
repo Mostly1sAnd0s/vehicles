@@ -33,9 +33,11 @@ export class WorldSim {
     // neither steps nor draws its own instances; everything rides on server snapshots.
     this.coopMode = false;
     this.coopPaths = new Map(); // bot.id -> [{x,y}] accumulated client-side from snapshots
+    this._dragBot = null;       // host-dragged shared bot: {id, x, y} for optimistic render until server echoes
     this.beams = true;
     this.selectedElement = null;
     this.selectedInstance = null;   // a running vehicle shown in the inspector (X/Y/Rot)
+    this.selectedRemoteBot = null;  // a shared (co-op) bot selected for the X/Y/Rot popup
     this.stepCount = 0;        // monotonic sim-step counter (drives cooldownTicks)
     this.convertedCount = 0;   // total instances converted this run (reset on reset())
     this.instances = [];          // {id, protoId, body, seed:{x,y,rotation}}
@@ -345,12 +347,30 @@ export class WorldSim {
     let drag = null;
     this.canvas.addEventListener('mousedown', e => {
       const w = this.toWorld(e);
+      // Co-op (M5 p3): shared-world bots render on top and aren't local instances, so they need
+      // their own grab. The host DRAGS them (authoritative moveBot); a participant may SELECT one
+      // to read its pose in the inspector (X/Y/Rot are read-only for non-hosts).
+      if (this.coopMode) {
+        const bot = this.remoteBotAt(w);
+        if (bot) {
+          this.selectedRemoteBot = { id: bot.id };
+          this.selectedInstance = null;
+          this.selectedElement = null;
+          this.renderInspector();
+          if (this.hooks?.isCoopAdmin?.()) {
+            drag = { mode: 'bot', id: bot.id, started: { x: bot.x, y: bot.y }, mouse: w, lastSend: 0 };
+            this._dragBot = { id: bot.id, x: bot.x, y: bot.y };
+          }
+          return;
+        }
+      }
       // instance drag takes precedence: a robot on top of an element gets grabbed first
       const inst = findInstanceAt(this.instances, pid => this.prototypeVehicle(pid), w, this.view.zoom);
       if (inst) {
         // Grab the robot AND surface it in the inspector (X/Y/Rot), like elements.
         this.selectedInstance = inst;
         this.selectedElement = null;
+        this.selectedRemoteBot = null;
         this.renderInspector();
         drag = { mode: 'instance', inst };
         return;
@@ -359,18 +379,29 @@ export class WorldSim {
       if (el) {
         this.selectedElement = el.id;
         this.selectedInstance = null;
+        this.selectedRemoteBot = null;
         drag = { mode: 'element', el, started: { x: el.position.x, y: el.position.y }, mouse: w };
         this.renderInspector();
       } else {
         this.selectedElement = null;
         this.selectedInstance = null;
+        this.selectedRemoteBot = null;
         this.renderInspector();
         drag = { mode: 'pan', view0: { ...this.view }, e0: { x: e.clientX, y: e.clientY } };
       }
     });
     window.addEventListener('mousemove', e => {
       if (!drag) return;
-      if (drag.mode === 'element') {
+      if (drag.mode === 'bot') {
+        // Offset-based (like element drag): the bot follows the grab point, not the cursor center.
+        const w = this.toWorld(e);
+        const x = drag.started.x + (w.x - drag.mouse.x);
+        const y = drag.started.y + (w.y - drag.mouse.y);
+        this._dragBot = { id: drag.id, x, y }; // optimistic local render on every move
+        // Throttle the wire command to ~30Hz; a final authoritative send happens on mouseup.
+        const now = performance.now();
+        if (now - drag.lastSend > 33) { this.hooks?.onBotChange?.({ id: drag.id, x, y }); drag.lastSend = now; }
+      } else if (drag.mode === 'element') {
         const w = this.toWorld(e);
         drag.el.position.x = drag.started.x + (w.x - drag.mouse.x);
         drag.el.position.y = drag.started.y + (w.y - drag.mouse.y);
@@ -396,6 +427,12 @@ export class WorldSim {
       if (drag?.mode === 'element') {
         this.hooks?.onElementChange?.({ op: 'move', id: drag.el.id, x: Math.round(drag.el.position.x), y: Math.round(drag.el.position.y) });
       }
+      // Co-op (M5 p3): a dropped shared bot lands at its final pose — send the authoritative move
+      // once, then let the server snapshot (or the optimistic pose) hold until it echoes back.
+      if (drag?.mode === 'bot' && this._dragBot) {
+        this.hooks?.onBotChange?.({ id: drag.id, x: Math.round(this._dragBot.x), y: Math.round(this._dragBot.y) });
+      }
+      this._dragBot = null;
       drag = null;
     });
     this.canvas.addEventListener('wheel', e => {
@@ -450,6 +487,27 @@ export class WorldSim {
       if (el.primitive === 'circle') r = (el.properties?.radius ?? 10) * (el.scale?.x ?? 1);
       else r = Math.max(el.properties?.width ?? 20, el.properties?.height ?? 20) / 2;
       if (Math.hypot(dx, dy) <= r + 4 / this.view.zoom) return el;
+    }
+    return null;
+  }
+
+  /**
+   * Co-op (M5 p3): find a shared-world bot under world point w, for host drags. Remote bots render
+   * on top and aren't in `this.instances`, so they need their own hit-test. The body is an axis-
+   * aligned rect rotated by b.angle, so we test in the bot's local frame. Last-drawn (topmost) bot
+   * wins, so we scan the draw order in reverse.
+   */
+  remoteBotAt(w) {
+    const bots = this.hooks?.remoteBots?.() ?? [];
+    const pad = 4 / this.view.zoom;
+    for (let i = bots.length - 1; i >= 0; i--) {
+      const b = bots[i];
+      const hw = (b.w ?? 80) / 2 + pad, hh = (b.h ?? 40) / 2 + pad;
+      const dx = w.x - b.x, dy = w.y - b.y;
+      const a = -(b.angle ?? 0);
+      const lx = dx * Math.cos(a) - dy * Math.sin(a);
+      const ly = dx * Math.sin(a) + dy * Math.cos(a);
+      if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return b;
     }
     return null;
   }
@@ -740,8 +798,13 @@ export class WorldSim {
       ctx.globalAlpha = 1;
     }
     bots.forEach((b) => {
+      // Co-op (M5 p3): while the host drags a bot, render it at the optimistic pose so it tracks
+      // the cursor; the authoritative server snapshot overwrites this on the next frame.
+      const isDrag = this._dragBot?.id === b.id;
+      const bx = isDrag ? this._dragBot.x : b.x;
+      const by = isDrag ? this._dragBot.y : b.y;
       ctx.save();
-      ctx.translate(b.x, b.y);
+      ctx.translate(bx, by);
       ctx.rotate(b.angle ?? 0);
       // The body IS the vehicle's editor color: the server snapshot carries body.color (set in
       // the editor's swatch palette), so a shared bot reads exactly like its local twin. Mine

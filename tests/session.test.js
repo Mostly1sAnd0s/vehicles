@@ -186,3 +186,50 @@ test('growing a fleet that has never deployed is refused (no ghost instances)', 
   s.handle(a.token, { type: 'setCount', protoId: b.protoId, count: 0 });
   assert.equal(s.world.instancesFor(b.protoId).length, 0);
 });
+
+test('M5: moveBot is admin-only and repositions a deployed bot authoritatively (host-drag backstop)', () => {
+  const s = makeSession();
+  const a = s.join({ name: 'alice', role: 'admin' });
+  const b = s.join({ name: 'bob', role: 'participant' });
+  capture(s, a.token); capture(s, b.token);
+
+  // bob deploys so a shared bot exists for the host to reposition.
+  assert.equal(s.handle(b.token, { type: 'deploy', vehicle: seekerDoc() }).type, 'deployed');
+  const before = s.currentSnapshotWire().bots[0];
+  assert.ok(before, 'a deployed bot should exist in the snapshot');
+  assert.ok(Math.abs(123 - before.x) > 50 || Math.abs(456 - before.y) > 50, 'test target must differ from the spawn pose');
+
+  // The server is the real backstop: a participant's moveBot is refused even if its UI lets them try.
+  const denied = s.handle(b.token, { type: 'moveBot', id: before.id, x: 123, y: 456 });
+  assert.equal(denied.type, 'error', 'non-admin moveBot must be refused');
+
+  // The admin's moveBot acks botMoved and lands the bot at the new pose in the authoritative snapshot.
+  const ok = s.handle(a.token, { type: 'moveBot', id: before.id, x: 123, y: 456 });
+  assert.equal(ok.type, 'botMoved', 'admin moveBot should ack');
+  const after = s.currentSnapshotWire().bots[0];
+  assert.ok(Math.abs(after.x - 123) < 1e-6 && Math.abs(after.y - 456) < 1e-6, 'host moveBot must reposition the bot in the snapshot');
+
+  // An unknown id is a clean error, not a crash.
+  assert.equal(s.handle(a.token, { type: 'moveBot', id: 'ghost', x: 0, y: 0 }).type, 'error', 'unknown bot id must be an error');
+});
+
+test('M5: moveBot with a rotation lands the bot at X/Y AND heading (inspector Rot field)', () => {
+  const s = makeSession();
+  const a = s.join({ name: 'alice', role: 'admin' });
+  const b = s.join({ name: 'bob', role: 'participant' });
+  capture(s, a.token); capture(s, b.token);
+  s.handle(b.token, { type: 'deploy', vehicle: seekerDoc() });
+  const botId = s.currentSnapshotWire().bots[0].id;
+
+  const res = s.handle(a.token, { type: 'moveBot', id: botId, x: 10, y: -20, rot: Math.PI / 2 });
+  assert.equal(res.type, 'botMoved');
+  assert.ok(Math.abs(res.rot - Math.PI / 2) < 1e-9, 'ack carries the rotation');
+  const after = s.currentSnapshotWire().bots[0];
+  assert.ok(Math.abs(after.x - 10) < 1e-6 && Math.abs(after.y - (-20)) < 1e-6, 'x/y must land');
+  assert.ok(Math.abs(after.angle - Math.PI / 2) < 1e-3, 'angle must land (rounded on the wire)');
+
+  // Without rot, heading is untouched.
+  s.handle(a.token, { type: 'moveBot', id: botId, x: 12, y: 22 });
+  const after2 = s.currentSnapshotWire().bots[0];
+  assert.ok(Math.abs(after2.angle - Math.PI / 2) < 1e-3, 'omitting rot must not change heading');
+});

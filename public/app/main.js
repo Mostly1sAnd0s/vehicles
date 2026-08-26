@@ -135,6 +135,25 @@ async function main() {
       // Co-op: Play/Pause/Reset run the SHARED world (server-authoritative); the button label
       // comes back via the authoritative `state` message (worldSim.setRunning).
       onSharedControl: (cmd) => coopPanel.client.controls(cmd),
+      // Co-op (M5 p3): the host may drag shared-world bots on the canvas; participants may not.
+      isCoopAdmin: () => {
+        const c = coopPanel.client;
+        return c.status === 'connected' && c.you?.role === 'admin';
+      },
+      // Co-op (M5 p3): a dragged/edited shared bot syncs out to the server (host only;
+      // server-authoritative). `rot` (radians) comes from the inspector's Rot field.
+      onBotChange: (info) => {
+        const c = coopPanel.client;
+        if (c.status !== 'connected' || c.you?.role !== 'admin') return; // single-player or read-only
+        c.moveBot(info.id, info.x, info.y, info.rot);
+        // Optimistic: patch the snapshot bot so canvas + popup reflect the pose before the
+        // server's echo arrives (the immediate broadcast corrects it within a few ms).
+        const b = (c.bots ?? []).find(bb => bb.id === info.id);
+        if (b) {
+          b.x = info.x; b.y = info.y;
+          if (info.rot != null && Number.isFinite(info.rot)) b.angle = info.rot;
+        }
+      },
     });
   }
 
@@ -216,6 +235,16 @@ async function main() {
 
   // simplify propagation: only track owner prototype after Edit
   const _onVehicleChanged = editor.hooks.onVehicleChanged;
+  // Co-op: once a participant has deployed, LIVE edits re-deploy automatically (throttled). The
+  // server rebuilds each clone's body in place (pose + momentum preserved), so picking a body
+  // color in the editor updates your running shared bot within ~400ms — no second "Deploy
+  // design" click. A content signature skips no-op resends (refresh() churn is common).
+  let _coopSyncSig = null;
+  let _coopSyncTimer = null;
+  const coopHasDeployedBots = () => {
+    const c = coopPanel.client;
+    return c.status === 'connected' && !!c.you?.name && (c.bots ?? []).some(b => b.owner === c.you.name);
+  };
   editor.hooks.onVehicleChanged = v => {
     const w = state.world.vehiclePrototypes.find(p => p === (state.vehicleOwner ?? null));
     if (w) w._vehicle = clone(v);
@@ -225,6 +254,18 @@ async function main() {
     // keep any running sim in step with the edit (signature-guarded: wire
     // maps refresh on wiring changes, bodies only on geometry changes)
     worldSim?.syncInstances();
+    // Co-op live sync: ship the same doc "Deploy design" would ship right now. While editing the
+    // coop design that is state.coopVehicle (just updated above); otherwise the coop design if
+    // one exists, else the editor's current vehicle. Skipped until something actually deployed.
+    if (coopHasDeployedBots()) {
+      const doc = state.coopVehicle ?? v;
+      const sig = JSON.stringify(doc);
+      if (sig !== _coopSyncSig) {
+        _coopSyncSig = sig;
+        clearTimeout(_coopSyncTimer);
+        _coopSyncTimer = setTimeout(() => coopPanel.client.deploy(clone(doc)), 400);
+      }
+    }
   };
 
   // ---------- file import/export ----------

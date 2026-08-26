@@ -119,6 +119,7 @@ export class Session {
       case 'setElements':   reply = this._setElements(p, msg); break;
       case 'moveElement':   reply = this._moveElement(p, msg); break;
       case 'removeElement': reply = this._removeElement(p, msg); break;
+      case 'moveBot':       reply = this._moveBot(p, msg); break;
       default:         reply = { type: 'error', error: `unknown message type: ${msg?.type}` };
     }
     // Errors are private feedback to the actor; world-affecting successes already broadcast themselves.
@@ -219,6 +220,22 @@ export class Session {
     const res = { type: 'elementMoved', id: el.id, x: el.position.x, y: el.position.y };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });
+    return res;
+  }
+
+  _moveBot(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'only the host moves shared bots' };
+    const x = Math.round(Number(msg?.x)), y = Math.round(Number(msg?.y));
+    // Optional rotation (radians) from the inspector's Rot field; omitted when only X/Y moved.
+    const rot = msg?.rot != null ? Number(msg.rot) : null;
+    const ok = this.world.moveBot(msg?.id, x, y, rot);
+    if (!ok) return { type: 'error', error: `no such bot: ${msg?.id}` };
+    const res = { type: 'botMoved', id: msg.id, x, y };
+    if (rot != null && Number.isFinite(rot)) res.rot = rot;
+    this._sendTo(p.token, res);
+    // Authoritative pose: broadcast an immediate snapshot so every client (incl. the host's own
+    // other windows) sees the bot land without waiting for the next ~15Hz tick.
+    this.broadcast(this.currentSnapshotWire());
     return res;
   }
 

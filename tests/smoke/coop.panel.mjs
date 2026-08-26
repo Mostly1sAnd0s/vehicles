@@ -191,10 +191,52 @@ try {
     const pp = sim.canvas.getContext('2d').getImageData(cx, cy, 1, 1).data;
     const isMagenta = pp[0] > 140 && pp[2] > 140 && pp[1] < 130; // #be4bdb signature (blended ok)
     const bodyPixel = [pp[0], pp[1], pp[2]];
-    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, botColor, bodyPixel, isMagenta, addedEl: { id: el0.id, type: el0.type, x: el0.position.x, y: el0.position.y } });
+
+    // 5. LIVE design sync (regression: "no matter what color I pick in the editor, bots stay red"):
+    //    pick another swatch and do NOT click Deploy — the already-deployed shared bot must adopt
+    //    the new body color within ~1s via the throttled auto-redeploy (body rebuilt in place).
+    $('tab-editor').click();
+    await sleep(400);
+    const sw = [...document.querySelectorAll('.color-palette .swatch')].find(b => b.dataset.color === '#339af0');
+    if (!sw) throw new Error('no #339af0 swatch in the body palette');
+    sw.click();
+    const liveColor = await poll(() => {
+      const c = window.__app().coopPanel.client.bots.find(b => b.owner === 'smoke')?.color;
+      return c === '#339af0' ? c : null;
+    }, 60);
+
+    // 6. X/Y/Rot popup (regression: "no pose popup when clicking a bot in co-op mode"): click the
+    //    shared bot directly ON THE CANVAS — the inspector shows X/Y/Rot, and editing Rot sends an
+    //    authoritative moveBot that lands server-side (bot angle ≈ 90°, echoed in a snapshot).
+    $('tab-world').click();
+    await sleep(400);
+    const sim2 = window.__app().worldSim;
+    const rb2 = sim2.hooks.remoteBots().find(b => b.owner === 'smoke');
+    if (!rb2) throw new Error('no shared bot to select on the canvas');
+    sim2.view.x = rb2.x; sim2.view.y = rb2.y; // center the camera so the bot is at screen center
+    const rect = sim2.canvas.getBoundingClientRect();
+    const px = rect.left + rect.width / 2, py = rect.top + rect.height / 2;
+    sim2.canvas.dispatchEvent(new MouseEvent('mousedown', { clientX: px, clientY: py, bubbles: true }));
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await sleep(200);
+    const wiBox = $('world-inspector');
+    const hasInputs = !!(wiBox && wiBox.style.display !== 'none' && ['wi-ix', 'wi-iy', 'wi-ir'].every(id => wiBox.querySelector('#' + id)));
+    if (!hasInputs) throw new Error('X/Y/Rot popup did not appear for a selected shared bot: display=' + (wiBox?.style.display) + ' html=' + (wiBox?.innerHTML ?? '').slice(0, 120));
+    const rotIn = wiBox.querySelector('#wi-ir');
+    rotIn.value = '90';
+    rotIn.dispatchEvent(new Event('change', { bubbles: true }));
+    const angleAfter = await poll(() => {
+      const b = window.__app().coopPanel.client.bots.find(b => b.owner === 'smoke');
+      return b && Math.abs(b.angle - Math.PI / 2) < 0.05 ? +b.angle.toFixed(4) : null;
+    }, 40);
+
+    return JSON.stringify({ layout, code, hosted, deployedStatus, fleetText: $('remote-fleet').textContent, botColor, bodyPixel, isMagenta, liveColor, hasInputs, angleAfter, addedEl: { id: el0.id, type: el0.type, x: el0.position.x, y: el0.position.y } });
   })()`));
 
-  const { layout, code, hosted, deployedStatus, fleetText, botColor, bodyPixel, isMagenta, addedEl } = resultA;
+  const { layout, code, hosted, deployedStatus, fleetText, botColor, bodyPixel, isMagenta, liveColor, hasInputs, angleAfter, addedEl } = resultA;
+  if (liveColor !== '#339af0') fail('LIVE color sync failed: bot did not adopt the picked swatch without a re-deploy: ' + liveColor);
+  if (!hasInputs) fail('X/Y/Rot popup missing for a selected shared bot');
+  if (angleAfter == null || Math.abs(angleAfter - Math.PI / 2) > 0.05) fail('inspector Rot edit did not land server-side: ' + angleAfter);
   if (!layout.sideHasCoop) fail('no Co-op section in the World sidebar: ' + JSON.stringify(layout));
   if (layout.noTab === false) fail('standalone Co-op tab still present');
   if (!/^[A-Z0-9]{6}$/.test(code ?? '')) fail('host did not reveal a 6-char code: ' + code);

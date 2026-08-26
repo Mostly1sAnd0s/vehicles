@@ -154,6 +154,13 @@ export class CoopClient {
   moveElement(id, x, y) { return this._send({ type: 'moveElement', id, x, y }); }
   removeElement(id) { return this._send({ type: 'removeElement', id }); }
   setElements(elements) { return this._send({ type: 'setElements', elements }); } // host seeds the world at host-time
+  // Shared-world bot reposition (host-only on the server; participants get refusal errors).
+  // rot (radians) is optional — the inspector's Rot field sends it; a plain X/Y drag omits it.
+  moveBot(id, x, y, rot) {
+    const m = { type: 'moveBot', id, x, y };
+    if (rot != null && Number.isFinite(rot)) m.rot = rot;
+    return this._send(m);
+  }
 
   _send(msg) { if (this.ws && this.status === 'connected') this.ws.send(JSON.stringify(msg)); return this; }
 

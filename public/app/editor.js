@@ -389,6 +389,13 @@ export class VehicleEditor {
   refresh() {
     const v = this.state.vehicle;
 
+    // A vehicle that never picked a swatch has no body.color. Normalize it ONCE so every
+    // surface (editor canvas, local world, co-op snapshot) agrees on the same default, and
+    // co-op live-sync can ship it — previously the server fell back to red (#cc3333) while
+    // the editor drew blue, so shared bots of an uncolored vehicle were ALWAYS red.
+    if (!v.body) v.body = { shape: 'rect', width: 80, height: 40 };
+    if (!v.body.color) v.body.color = DEFAULT_BODY_COLOR;
+
     // Body color lives in the left palette (the old global Wiring box is gone —
     // wiring is now done per-part via the connection slots in the inspector).
     this.ui.bodyColor.innerHTML = `<div class="color-palette">${colorPaletteHtml(v.body.color)}</div>`;

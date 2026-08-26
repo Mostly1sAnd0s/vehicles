@@ -116,6 +116,22 @@ export class HeadlessWorld {
   }
 
   /**
+   * Move an instance to a world position (host drag). Sets the pose, zeroes momentum so the bot
+   * doesn't fling, and adopts the dropped pose as the seed so a Reset restores it there — parity
+   * with the local single-player drag, where mouseup adopts the dropped pose as the seed.
+   */
+  moveBot(id, x, y, rot) {
+    const inst = this.instances.find(v => v.id === id);
+    if (!inst || !inst.body) return false;
+    M_BodySetPosition(this.M, inst.body, { x, y });
+    if (rot != null && Number.isFinite(Number(rot))) M_BodySetAngle(this.M, inst.body, Number(rot));
+    this.M.Body.setVelocity(inst.body, { x: 0, y: 0 });
+    this.M.Body.setAngularVelocity(inst.body, 0);
+    inst.seed = { x, y, rotation: inst.body.angle };
+    return true;
+  }
+
+  /**
    * Ensure exactly `n` live clones of a proto exist (admin-controlled count). Adds new clones at
    * `spawnAt` (or spread in a row when omitted); removes the most recent extras. Existing clones
    * and their poses are left alone.
@@ -297,7 +313,10 @@ export class HeadlessWorld {
           id: i.id, protoId: i.protoId, owner: i.owner ?? null,
           x: i.body.position.x, y: i.body.position.y, angle: i.body.angle,
           vx: i.body.velocity.x, vy: i.body.velocity.y,
-          w: v?.body?.width ?? 80, h: v?.body?.height ?? 40, color: v?.body?.color ?? '#cc3333',
+          // The fallback must match the editor's DEFAULT_BODY_COLOR (public/app/color.js) so a
+          // vehicle that never picked a swatch reads the SAME color in co-op as it does locally
+          // (it used to fall back to #cc3333 red here while the editor drew it blue).
+          w: v?.body?.width ?? 80, h: v?.body?.height ?? 40, color: v?.body?.color ?? '#4da3ff',
           // range rides along for distance-sensor beams (the sample itself doesn't carry it)
           comps: (v.components ?? []).filter(c => c.local).map(c => ({ id: c.id, x: c.local.x, y: c.local.y, type: c.type, range: c.props?.range })),
           // samples already include world-space samplePoint/direction from the server's live pose
