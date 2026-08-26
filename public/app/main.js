@@ -75,6 +75,56 @@ async function main() {
     $('export-world').hidden = !isWorld;
   }
 
+  // ---------- World sidebar tabs (Sandbox / Co-Op) + mode-transition overlay ----------
+  // The World view's left pane is split into two modes so the user only sees the controls for the
+  // mode they are in: Sandbox (elements + vehicles) and Co-Op (gateway/name/host/join/etc.).
+  // Joining a shared world disables the Sandbox tab; leaving re-enables it. A brief overlay
+  // ("Joining/Leaving world…") covers the canvas while the world clears and swaps modes.
+  // (These are the World-view sub-tabs, NOT the retired top-level Co-op tab; distinct ids on
+  // purpose so tests that assert `!#tab-coop` for the standalone tab keep passing.)
+  const sideTabSandbox = $('mode-sandbox');
+  const sideTabCoop = $('mode-coop');
+  const paneSandbox = $('side-pane-sandbox');
+  const paneCoop = $('side-pane-coop');
+  const worldTransition = $('world-transition');
+  const worldTransitionMsg = $('world-transition-msg');
+
+  function setSideTab(name) { // 'sandbox' | 'coop' — swap which pane's controls are visible
+    const coop = name === 'coop';
+    sideTabSandbox.classList.toggle('active', !coop);
+    sideTabCoop.classList.toggle('active', coop);
+    paneSandbox.hidden = coop;
+    paneCoop.hidden = !coop;
+  }
+
+  // Deactivating the Sandbox tab means we are in a shared world: show Co-Op controls and grey the
+  // (now-disabled) Sandbox tab. Re-enabling it (leaving) puts us back on the single-player world.
+  function setSandboxDisabled(disabled) {
+    sideTabSandbox.disabled = disabled;
+    setSideTab(disabled ? 'coop' : 'sandbox');
+  }
+
+  // The transition overlay: shown when a join/leave starts, then held for at least minMs so the
+  // animation is visible even if the socket round-trip is fast. _wtShownAt tracks when it went up,
+  // so the minimum time is measured from the reveal rather than from the (earlier) trigger.
+  let _wtShownAt = 0;
+  let _wtHideTimer = null;
+  function showWorldTransition(msg) {
+    clearTimeout(_wtHideTimer);
+    _wtShownAt = performance.now();
+    if (msg) worldTransitionMsg.textContent = msg;
+    worldTransition.hidden = false;
+  }
+  function hideWorldTransition(minMs = 750) {
+    clearTimeout(_wtHideTimer);
+    const wait = Math.max(0, minMs - (performance.now() - _wtShownAt));
+    _wtHideTimer = setTimeout(() => { worldTransition.hidden = true; }, wait);
+  }
+
+  sideTabSandbox.onclick = () => { if (!sideTabSandbox.disabled) setSideTab('sandbox'); };
+  sideTabCoop.onclick = () => { if (!sideTabCoop.disabled) setSideTab('coop'); };
+  setSideTab('sandbox'); // default: the single-player sandbox is shown first
+
   const editor = new VehicleEditor($('editor-canvas'), {
     palette: $('palette'),
     gatePalette: $('gate-palette'),
@@ -169,6 +219,12 @@ async function main() {
     deploy: $('coop-deploy'), editDesign: $('coop-edit'),
     remoteFleet: $('remote-fleet'),
   }, {
+    // World mode transition (Sandbox ⇄ Co-Op tabs + canvas overlay): shown when the user presses
+    // Host/Join (the world clears to "Joining world…") and again on Disconnect ("Leaving world…").
+    // The Sandbox tab is disabled/enabled from the client.onMessage handler below, once the shared
+    // world has actually loaded or gone.
+    onConnectStart: () => { setSideTab('coop'); showWorldTransition('Joining world…'); },
+    onDisconnectStart: () => { showWorldTransition('Leaving world…'); },
     // "Deploy design" ships the participant's co-op design (falls back to the editor's live
     // vehicle before a co-op design exists).
     getVehicle: () => state.coopVehicle ?? state.vehicle,
@@ -209,6 +265,8 @@ async function main() {
       worldSim.setCoop(true);
       worldSim.setRunning(c.running); // welcome carries the authoritative running flag
       worldSim.buildObstacles();
+      setSandboxDisabled(true); // in a shared world: the single-player Sandbox tab is no longer usable
+      hideWorldTransition();    // the "Joining world…" overlay can lift — the co-op world is live
     } else if (msg.type === 'elements' && c.status === 'connected' && c.you?.role !== 'admin') {
       // Mirror the host's edit: replace the local static elements and rebuild obstacle bodies.
       state.world.elements = clone(msg.elements ?? []);
@@ -230,6 +288,8 @@ async function main() {
       // Back to single-player: the local world steps + draws its own instances again.
       worldSim?.setCoop(false);
       worldSim?.buildObstacles();
+      setSandboxDisabled(false); // left the shared world: the Sandbox tab is usable again
+      hideWorldTransition();     // the "Leaving world…" overlay can lift — home world restored
     }
   });
 

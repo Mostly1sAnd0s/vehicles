@@ -56,40 +56,59 @@
   <!-- ============ WORLD TAB ============ -->
   <section id="panel-world" class="tab-panel">
     <aside class="side" id="world-side">
-      <h3>Elements</h3>
-      <button id="add-light">+ Light source</button>
-      <button id="add-rock">+ Rock (circle)</button>
-      <button id="add-wall">+ Wall (rect)</button>
-      <h3>Vehicles</h3>
-      <button id="add-vehicle">+ Add Vehicle</button>
-      <div id="prototypes"></div>
-      <!-- Shared fleet (M5 p3–4): other participants' deployed vehicles, add/remove for the host -->
-      <div id="remote-fleet" hidden></div>
-      <!-- Co-op (phase M5): one gateway hosts many coded worlds. Host a fresh world to share its
-           code, or join an existing one — this client's bots are added to that shared world.
-           The standalone Co-op tab was folded into the World sidebar. -->
-      <h3>Co-op</h3>
-      <div id="coop-gw-fields">
-        <label>Gateway<input type="text" id="coop-gw-url" spellcheck="false" placeholder="ws://127.0.0.1:8090"></label>
-        <label>Name<input type="text" id="coop-gw-name" maxlength="24" placeholder="you"></label>
+      <!-- World sidebar tabs (Sandbox / Co-Op): the user only sees the controls for the mode they
+           are in. Sandbox shows the single-player world (elements + vehicles); Co-Op shows the
+           shared-world controls (gateway, name, host/join, disconnect, fleet). Joining a shared
+           world disables the Sandbox tab; leaving re-enables it (see main.js setSandboxDisabled). -->
+      <nav class="side-tabs" id="world-side-tabs" aria-label="World modes">
+        <button class="side-tab active" id="mode-sandbox" data-side="sandbox" title="Single-player sandbox world">Sandbox</button>
+        <button class="side-tab" id="mode-coop" data-side="coop" title="Shared co-op world">Co-Op</button>
+      </nav>
+      <!-- Sandbox pane: the single-player world — elements and vehicles only. -->
+      <div class="side-pane active" id="side-pane-sandbox">
+        <h3>Elements</h3>
+        <button id="add-light">+ Light source</button>
+        <button id="add-rock">+ Rock (circle)</button>
+        <button id="add-wall">+ Wall (rect)</button>
+        <h3>Vehicles</h3>
+        <button id="add-vehicle">+ Add Vehicle</button>
+        <div id="prototypes"></div>
       </div>
-      <div class="coop-gw-row" id="coop-gw-row">
-        <button id="coop-host" title="Create a new shared world and show its join code">Host</button>
-        <input type="text" id="coop-join-code" maxlength="6" spellcheck="false" placeholder="code">
-        <button id="coop-join" title="Join the shared world with that code">Join</button>
+      <!-- Co-op (M5): one gateway hosts many coded worlds. Host a fresh world to share its code,
+           or join an existing one — this client's bots are added to that shared world. -->
+      <div class="side-pane" id="side-pane-coop" hidden>
+        <h3>Co-op</h3>
+        <div id="coop-gw-fields">
+          <label>Gateway<input type="text" id="coop-gw-url" spellcheck="false" placeholder="ws://127.0.0.1:8090"></label>
+          <label>Name<input type="text" id="coop-gw-name" maxlength="24" placeholder="you"></label>
+        </div>
+        <div class="coop-gw-row" id="coop-gw-row">
+          <button id="coop-host" title="Create a new shared world and show its join code">Host</button>
+          <input type="text" id="coop-join-code" maxlength="6" spellcheck="false" placeholder="code">
+          <button id="coop-join" title="Join the shared world with that code">Join</button>
+        </div>
+        <button id="coop-disconnect" hidden>Disconnect</button>
+        <div class="coop-gw-row">
+          <button id="coop-edit" hidden title="Open the editor on your co-op design">✎ Edit my design</button>
+          <button id="coop-deploy" hidden title="Push your current design into the shared world — you drive your own bots only">Deploy design</button>
+        </div>
+        <div id="coop-gw-code" class="coop-code" hidden></div>
+        <div id="coop-gw-status" class="dim">not in a shared world</div>
+        <!-- Shared fleet (M5 p3–4): other participants' deployed vehicles, add/remove for the host -->
+        <div id="remote-fleet" hidden></div>
       </div>
-      <button id="coop-disconnect" hidden>Disconnect</button>
-      <div class="coop-gw-row">
-        <button id="coop-edit" hidden title="Open the editor on your co-op design">✎ Edit my design</button>
-        <button id="coop-deploy" hidden title="Push your current design into the shared world — you drive your own bots only">Deploy design</button>
-      </div>
-
-      <div id="coop-gw-code" class="coop-code" hidden></div>
-      <div id="coop-gw-status" class="dim">not in a shared world</div>
       <div class="pane-footer">Designed by Adam Kemp, 2026</div>
     </aside>
     <div class="canvas-wrap">
       <canvas id="world-canvas"></canvas>
+      <!-- Brief mode-transition animation ("Joining/Leaving world…") shown over the canvas while
+           the sandbox world clears and the shared world loads — or back again (main.js). -->
+      <div id="world-transition" class="world-transition" hidden>
+        <div class="world-transition-inner">
+          <span class="world-transition-msg" id="world-transition-msg">Joining world…</span>
+          <span class="world-transition-bar"><span></span></span>
+        </div>
+      </div>
       <div id="world-controls">
         <button id="btn-play">▶ Play</button>
         <button id="btn-step" title="Advance one physics step">Step</button>

@@ -34,12 +34,16 @@ export class CoopPanel {
    *                                   deploy, controls, start, pause, reset, remoteFleet}
    * @param {{client?:CoopClient, getVehicle?:(()=>object)}} [opts]
    */
-  constructor(ui, { client, getVehicle, onEditDesign } = {}) {
+  constructor(ui, { client, getVehicle, onEditDesign, onConnectStart, onDisconnectStart } = {}) {
     // Fail fast with the missing element's name rather than a cryptic null error mid-constructor.
     for (const [k] of Object.entries(ui)) if (!ui[k]) throw new Error('CoopPanel: missing UI element "' + k + '"');
     this.ui = ui;
     this.getVehicle = getVehicle;
     this.onEditDesign = onEditDesign;
+    // Mode-transition lifecycle hooks (main.js owns the canvas overlay + Sandbox tab state):
+    // onConnectStart fires when Host/Join is pressed; onDisconnectStart when Disconnect is.
+    this.onConnectStart = onConnectStart;
+    this.onDisconnectStart = onDisconnectStart;
     this.client = client ?? new CoopClient();
     this._wasConnected = false; // for "unexpected drop" handling on `closed`
     this._userLeft = false;     // set by an intentional Disconnect so `closed` stays quiet
@@ -151,6 +155,7 @@ export class CoopPanel {
 
   disconnect() {
     if (this.client.status !== 'connected') return;
+    this.onDisconnectStart?.(); // "Leaving world…" overlay + clear (main.js)
     this._userLeft = true;
     const code = this.client.code;
     this._wasConnected = false;
@@ -169,6 +174,7 @@ export class CoopPanel {
     localStorage.setItem(URL_KEY, url);
     localStorage.setItem(NAME_KEY, name);
 
+    this.onConnectStart?.({ mode: opts.mode }); // "Joining world…" overlay + clear (main.js)
     this.setBusy(true);
     this.ui.status.textContent = pendingMsg;
     try {
