@@ -364,8 +364,9 @@ export class WorldSim {
           return;
         }
       }
-      // instance drag takes precedence: a robot on top of an element gets grabbed first
-      const inst = findInstanceAt(this.instances, pid => this.prototypeVehicle(pid), w, this.view.zoom);
+      // instance drag takes precedence: a robot on top of an element gets grabbed first.
+      // Co-op: local instances are frozen and not drawn while connected — never grab a ghost.
+      const inst = this.coopMode ? null : findInstanceAt(this.instances, pid => this.prototypeVehicle(pid), w, this.view.zoom);
       if (inst) {
         // Grab the robot AND surface it in the inspector (X/Y/Rot), like elements.
         this.selectedInstance = inst;
@@ -380,8 +381,11 @@ export class WorldSim {
         this.selectedElement = el.id;
         this.selectedInstance = null;
         this.selectedRemoteBot = null;
-        drag = { mode: 'element', el, started: { x: el.position.x, y: el.position.y }, mouse: w };
         this.renderInspector();
+        // Co-op (M5 p3): shared-world elements are host-controlled. A participant may SELECT one
+        // for the read-only popup but must not drag it — the world is locked on their canvas.
+        if (this.coopMode && !this.hooks?.isCoopAdmin?.()) return;
+        drag = { mode: 'element', el, started: { x: el.position.x, y: el.position.y }, mouse: w, lastSend: 0 };
       } else {
         this.selectedElement = null;
         this.selectedInstance = null;
@@ -398,6 +402,7 @@ export class WorldSim {
         const x = drag.started.x + (w.x - drag.mouse.x);
         const y = drag.started.y + (w.y - drag.mouse.y);
         this._dragBot = { id: drag.id, x, y }; // optimistic local render on every move
+        this._refreshRemoteBotPopup(); // keep the selected bot's X/Y/Rot popup ticking while dragging
         // Throttle the wire command to ~30Hz; a final authoritative send happens on mouseup.
         const now = performance.now();
         if (now - drag.lastSend > 33) { this.hooks?.onBotChange?.({ id: drag.id, x, y }); drag.lastSend = now; }
@@ -407,6 +412,15 @@ export class WorldSim {
         drag.el.position.y = drag.started.y + (w.y - drag.mouse.y);
         this.buildObstacles();
         this.renderInspector();
+        // Co-op (M5 p3): stream the move WHILE dragging (~30 Hz, same throttle as bot drags) so
+        // participants watch the element follow the cursor instead of warping to its drop spot.
+        if (this.coopMode) {
+          const now = performance.now();
+          if (now - drag.lastSend > 33) {
+            this.hooks?.onElementChange?.({ op: 'move', id: drag.el.id, x: Math.round(drag.el.position.x), y: Math.round(drag.el.position.y) });
+            drag.lastSend = now;
+          }
+        }
       } else if (drag.mode === 'instance') {
         // setting position each move wins per-frame; zero momentum so it doesn't fling
         const w = this.toWorld(e);
@@ -476,9 +490,32 @@ export class WorldSim {
       }
     }
     for (const id of [...this.coopPaths.keys()]) if (!live.has(id)) this.coopPaths.delete(id);
+    this._refreshRemoteBotPopup(); // a selected shared bot's popup tracks the live pose (~15 Hz)
   }
 
   clearCoopPaths() { this.coopPaths.clear(); }
+
+  /**
+   * Live-update the selected shared bot's X/Y/Rot popup from the latest pose WITHOUT rebuilding
+   * the panel (a rebuild would steal focus mid-edit). Reads the optimistic drag pose while the
+   * host is dragging, the latest server snapshot otherwise. Only touches inputs that aren't
+   * focused, so a hand-typed value is never clobbered.
+   */
+  _refreshRemoteBotPopup() {
+    if (!this.selectedRemoteBot) return;
+    const box = this.ui?.worldInspector;
+    if (!box) return;
+    const rb = (this.hooks?.remoteBots?.() ?? []).find(b => b.id === this.selectedRemoteBot.id);
+    if (!rb) { this.renderInspector(); return; } // selection went stale — full render hides it
+    const pose = this._dragBot?.id === rb.id ? this._dragBot : rb;
+    const set = (id, v) => {
+      const el = box.querySelector('#' + id);
+      if (el && document.activeElement !== el) el.value = Math.round(v);
+    };
+    set('wi-ix', pose.x);
+    set('wi-iy', pose.y);
+    set('wi-ir', (rb.angle ?? 0) * 180 / Math.PI);
+  }
 
   hitElement(w) {
     for (const el of this.worldDoc.elements) {

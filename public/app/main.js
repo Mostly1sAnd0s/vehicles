@@ -271,6 +271,9 @@ async function main() {
       // Mirror the host's edit: replace the local static elements and rebuild obstacle bodies.
       state.world.elements = clone(msg.elements ?? []);
       worldSim?.buildObstacles();
+      // Keep an open read-only element popup live during the host's drag, and drop it if the
+      // host deleted the selected element. (Inputs are disabled here, so no focus is at risk.)
+      worldSim?.renderInspector();
     } else if (msg.type === 'snapshot') {
       // Accrue one motion-trail point per bot (Paths toggle reads these client-side).
       worldSim?.onCoopSnapshot();

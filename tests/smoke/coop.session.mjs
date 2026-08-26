@@ -204,6 +204,53 @@ try {
   const elsH2 = await elsSig(H);
   if (elsJ2 !== elsH2) fail('BUG3: live element edit not mirrored to joiner (joiner ' + elsJ2 + ' vs host ' + elsH2 + ')');
 
+  // ---------- BUG 10a: the JOINER's world is locked — its drag must move nothing --------
+  // Elements are host-controlled: a participant may select one for the read-only popup but
+  // grabbing it on their canvas must not move the element (locally or on the server).
+  const lightId = await H.ev(`window.__app().state.world.elements.find(e=>e.type==='light').id`);
+  const dragElementOn = (pg, steps) => pg.ev(`(async()=>{
+    const app=window.__app(); const sim=app.worldSim;
+    const el=app.state.world.elements.find(e=>e.id==='${lightId}');
+    const r=sim.canvas.getBoundingClientRect();
+    const sx=r.left+r.width/2+(el.position.x-sim.view.x)*sim.view.zoom;
+    const sy=r.top+r.height/2+(el.position.y-sim.view.y)*sim.view.zoom;
+    sim.canvas.dispatchEvent(new MouseEvent('mousedown',{clientX:sx,clientY:sy,bubbles:true}));
+    for(let i=1;i<=${steps};i++){
+      sim.canvas.dispatchEvent(new MouseEvent('mousemove',{clientX:sx+i*9,clientY:sy+i*6,bubbles:true}));
+      await new Promise(res=>setTimeout(res,40));
+    }
+    return JSON.stringify(app.state.world.elements.find(e=>e.id==='${lightId}').position);
+  })()`);
+  const posBefore10a = await dragElementOn(J, 6); // no mouseup: a real drag would end on release
+  await J.ev(`window.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}))`);
+  const posAfter10a = await J.ev(`JSON.stringify(window.__app().state.world.elements.find(e=>e.id==='${lightId}').position)`);
+  if (posBefore10a !== posAfter10a) fail('BUG10a: joiner drag MOVED a shared element locally (world not locked): ' + posBefore10a + ' -> ' + posAfter10a);
+  const hostPos10a = await H.ev(`JSON.stringify(window.__app().state.world.elements.find(e=>e.id==='${lightId}').position)`);
+  if (hostPos10a !== posBefore10a) fail('BUG10a: joiner drag reached the host/server (a participant must be read-only): ' + hostPos10a);
+  const insp10a = JSON.parse(await J.ev(`(()=>{const b=document.getElementById('world-inspector');return JSON.stringify({txt:b.textContent,xDisabled:b.querySelector('#wi-x')?.disabled,del:!!b.querySelector('#wi-del')})})()`));
+  if (!/read-only/i.test(insp10a.txt)) fail('BUG10a: joiner element popup not labeled read-only: ' + JSON.stringify(insp10a));
+  if (insp10a.xDisabled !== true) fail('BUG10a: joiner element popup inputs are editable: ' + JSON.stringify(insp10a));
+  if (insp10a.del !== false) fail('BUG10a: joiner element popup still offers Delete: ' + JSON.stringify(insp10a));
+
+  // ---------- BUG 10b: the HOST's element drag streams live — no warp on release -----------
+  // Mid-drag (button still down) the joiner's mirror must already track the move; before the
+  // fix only the mouseup synced, so the client saw the element teleport to its drop spot.
+  const sigBefore10b = await elsSig(J);
+  const startEl = JSON.parse(await H.ev(`JSON.stringify(window.__app().state.world.elements.find(e=>e.id==='${lightId}').position)`));
+  await dragElementOn(H, 6); // mousedown + 6 moves, NO mouseup yet
+  let moved10b = false;
+  for (let i = 0; i < 50 && !moved10b; i++) {
+    const jPos = JSON.parse(await J.ev(`JSON.stringify(window.__app().state.world.elements.find(e=>e.id==='${lightId}').position)`));
+    moved10b = Math.hypot(jPos.x - startEl.x, jPos.y - startEl.y) > 10;
+    if (!moved10b) await sleep(60);
+  }
+  await H.ev(`window.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}))`);
+  if (!moved10b) fail('BUG10b: joiner element did not track the host drag BEFORE release (still warps): sig ' + sigBefore10b);
+  const hPos10b = await H.ev(`JSON.stringify(window.__app().state.world.elements.find(e=>e.id==='${lightId}').position)`);
+  const jPos10b = await J.ev(`JSON.stringify(window.__app().state.world.elements.find(e=>e.id==='${lightId}').position)`);
+  const hd = Math.hypot(JSON.parse(hPos10b).x - JSON.parse(jPos10b).x, JSON.parse(hPos10b).y - JSON.parse(jPos10b).y);
+  if (hd > 3) fail('BUG10b: host/joiner element out of sync after the drag (host ' + hPos10b + ' vs joiner ' + jPos10b + ')');
+
   // ---------- BUG 9 (this fix): the shared world actually RUNS — Play drives the session,
   // the deployed vehicle senses the seeded elements, motors fire, it moves, and the client
   // carries beams/values/paths data from the snapshot. Before the fix Play only ran the LOCAL
@@ -290,6 +337,30 @@ try {
   }
   if (!home) fail('BUG9: Reset did not return the bot to its spawn seed (-360, 0) or clear trails: ' + JSON.stringify(hp));
   step('BUG9 done');
+
+  // ---------- BUG 10c: the host's bot popup ticks WHILE dragging (like element drags) ------
+  // Clicking a shared bot shows X/Y/Rot; before the fix those values froze at click-time and
+  // only re-synced from later snapshots. During the drag the popup must follow the cursor live.
+  const pop10c = await H.ev(`(async()=>{
+    const app=window.__app(); const sim=app.worldSim; const c=app.coopPanel.client;
+    const b=c.bots.find(x=>x.owner===c.you.name);
+    const r=sim.canvas.getBoundingClientRect();
+    const sx=r.left+r.width/2+(b.x-sim.view.x)*sim.view.zoom;
+    const sy=r.top+r.height/2+(b.y-sim.view.y)*sim.view.zoom;
+    sim.canvas.dispatchEvent(new MouseEvent('mousedown',{clientX:sx,clientY:sy,bubbles:true}));
+    await new Promise(res=>setTimeout(res,120));
+    const before=document.getElementById('wi-ix')?.value ?? null;
+    for(let i=1;i<=6;i++){
+      sim.canvas.dispatchEvent(new MouseEvent('mousemove',{clientX:sx+i*10,clientY:sy+i*4,bubbles:true}));
+      await new Promise(res=>setTimeout(res,40));
+    }
+    const after=document.getElementById('wi-ix')?.value ?? null;
+    window.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+    return JSON.stringify({before,after});
+  })()`);
+  const p10c = JSON.parse(pop10c);
+  if (p10c.before == null) fail('BUG10c: bot popup did not open on click (wi-ix missing): ' + pop10c);
+  if (!(Number(p10c.after) > Number(p10c.before))) fail('BUG10c: bot popup X did not follow the drag live: ' + pop10c);
 
   // ---------- BUG 6: host disconnects → joiner sent home, world reclaimed -------
   await H.ev(`document.getElementById('coop-disconnect').click()`);

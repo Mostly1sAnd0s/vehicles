@@ -724,3 +724,26 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   the test's `thrustScale=2` (~300 px/tick tunnels any matter-js discrete collision), hence the step-level
   assertions. The smoke itself gained per-eval CDP timeouts, step milestones, and a watchdog so a wedged
   headless page fails loudly instead of hanging the probe forever.
+
+- [x] **Client co-op world rendering: locked elements, live element drags, ticking bot popup.** Three
+  polish bugs in the shared-world canvas. (a) *Locked world:* a participant's mousedown still grabbed
+  world elements and dragged them on a frozen mirror (`bindCanvas` had no role gate on the element
+  branch — only bots were host-gated). Now a participant may SELECT an element for its popup but not
+  drag it (no grab, no pan); the element inspector renders **read-only** for non-hosts in co-op mode
+  (inputs `disabled`, Delete hidden, "(read-only)" title — same contract as the shared-bot popup), and
+  the local-instance grab is skipped entirely while connected so a frozen ghost can't be picked up.
+  (b) *No warp on element drags:* the host only sent `moveElement` on mouseup, so participants saw the
+  element teleport to its drop spot. Element drags now stream the move while dragging (~30 Hz throttle,
+  identical to bot drags; final rounded send still on mouseup), and the participant's `elements` mirror
+  re-renders its open read-only popup per message so selected elements track live too. (c) *Bot popup
+  ticks while dragging:* clicking a shared bot showed X/Y/Rot once, then froze while the drag went on
+  (element drags re-render the inspector every mousemove; bot drags didn't). New `WorldSim
+  ._refreshRemoteBotPopup()` updates the popup values in place — no innerHTML rebuild, so a focused
+  input is never clobbered — reading the optimistic `_dragBot` pose while dragging and the latest server
+  snapshot otherwise; it runs on every bot-drag mousemove AND per received snapshot (`onCoopSnapshot`,
+  ~15 Hz), so a selected bot keeps ticking while the session runs. The popup also shows the optimistic
+  drag pose immediately (was: stale snapshot position mid-drag). Covered e2e in `coop.session.mjs`
+  BUG10a/10b/10c: joiner drag moves nothing (local, host, or server) + read-only popup asserted; host
+  element drag verified on the joiner's mirror **mid-drag with the button still down** (pre-fix this
+  was empty), then host/joiner within 3px after release; host bot popup `wi-ix` follows the cursor live
+  through a drag. Unit suite **246/246**; all 7 browser smokes green (+ `coop.session.mjs`).
