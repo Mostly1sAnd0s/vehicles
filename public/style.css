@@ -109,6 +109,25 @@ main { flex: 1; min-height: 0; display: flex; }
 #world-side .coop-code { font-family: monospace; font-size: 22px; letter-spacing: 6px; text-align: center; padding: 6px 0; margin: 4px 0; color: inherit; }
 #coop-gw-status { min-height: 15px; margin: 4px 0 8px; }
 
+/* Advanced (host address): collapsed by default — the address is automatic in every normal case.
+   The summary carries the override, so a non-default target is visible without opening it. */
+#side-pane-coop .coop-advanced { margin: 2px 0 4px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); }
+#side-pane-coop .coop-advanced summary { cursor: pointer; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; list-style: none; }
+#side-pane-coop .coop-advanced summary::-webkit-details-marker { display: none; }
+#side-pane-coop .coop-advanced summary::before { content: "\25B8  "; }
+#side-pane-coop .coop-advanced[open] summary::before { content: "\25BE  "; }
+#side-pane-coop .coop-advanced #coop-advanced-tag { text-transform: none; letter-spacing: 0; font-family: monospace; margin-left: 6px; }
+#side-pane-coop .coop-hint { font-size: 11px; line-height: 1.35; margin: 3px 0; }
+#side-pane-coop .coop-hint[hidden] { display: none; } /* a display rule outranks [hidden]; match it */
+
+/* The invite link: selectable by design (navigator.clipboard needs a secure context, and a LAN is
+   plain http), with Copy doing a selection-based fallback. */
+#world-side .coop-invite-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; width: 100%; }
+#world-side .coop-invite-row[hidden] { display: none; }
+#world-side .coop-invite-row input { flex: 1 1 0; min-width: 0; font-family: monospace; font-size: 11px; }
+#world-side .coop-invite-row button { flex: 0 0 auto; }
+#coop-invite-alt .coop-alt { cursor: pointer; text-decoration: underline dotted; }
+
 /* Shared fleet list (M5 p3–4): one row per participant, admin gets −/+/✕ */
 .remote-fleet { margin: 4px 0; }
 .fleet-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }

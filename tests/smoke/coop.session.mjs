@@ -115,7 +115,7 @@ try {
   const J = await newPage(); await boot(J);
 
   // ---------- BUG 4: host a world; Host/Join/code row must hide ------------------
-  await H.ev(`(async()=>{const $=id=>document.getElementById(id);$('tab-world').click();$('coop-gw-url').value='${url}';$('coop-gw-name').value='host1';$('coop-host').click();for(let i=0;i<80&&$('coop-gw-code').hidden;i++)await new Promise(r=>setTimeout(r,100));})()`);
+  await H.ev(`(async()=>{const $=id=>document.getElementById(id);$('tab-world').click();$('coop-host-addr').value='${url}';$('coop-gw-name').value='host1';$('coop-host').click();for(let i=0;i<80&&$('coop-gw-code').hidden;i++)await new Promise(r=>setTimeout(r,100));})()`);
   const code = await H.ev(`document.getElementById('coop-gw-code').textContent`);
   if (!/^[A-Z0-9]{6}$/.test(code ?? '')) fail('host never revealed a code');
   // Check VISUAL visibility (computed display), not just the hidden attribute: author CSS
@@ -167,7 +167,7 @@ try {
     fail('BUG7: expected the added powered_wheel in the wire comps: ' + liveComps);
 
   // ---------- BUG 5 (row hides on join) + BUG 3a (elements mirror on join) -------
-  await J.ev(`(async()=>{const $=id=>document.getElementById(id);$('tab-world').click();$('coop-gw-url').value='${url}';$('coop-gw-name').value='join1';$('coop-join-code').value='${code}';$('coop-join').click();for(let i=0;i<80&&$('coop-gw-code').hidden;i++)await new Promise(r=>setTimeout(r,100));})()`);
+  await J.ev(`(async()=>{const $=id=>document.getElementById(id);$('tab-world').click();$('coop-host-addr').value='${url}';$('coop-gw-name').value='join1';$('coop-join-code').value='${code}';$('coop-join').click();for(let i=0;i<80&&$('coop-gw-code').hidden;i++)await new Promise(r=>setTimeout(r,100));})()`);
   if ((await J.ev(`document.getElementById('coop-gw-code').textContent`)) !== code) fail('joiner did not land in the hosted world');
   const visibleJ = id => `getComputedStyle(document.getElementById('${id}')).display !== 'none'`;
   if (await J.ev(visibleJ('coop-gw-row')).then(v => v)) fail('BUG5: host/join row still visible while joined');

@@ -1,9 +1,11 @@
 /**
- * Run the authoritative co-op GATEWAY (PLAN.md §Multi-User, phase M5).
+ * Run a STANDALONE co-op gateway — for a box that hosts shared worlds but serves nothing.
+ * (You almost never need this: `npm run serve` already runs the gateway on the same port as the
+ * SPA. Use this when the worlds should live on a different machine/port than the files, e.g. a
+ * always-on classroom box that participants' browsers reach at a fixed address.)
  *
  * One process hosts many coded worlds (create one via a client's "Host", join one by code). Loads
- * the same config files the browser SPA uses. Pure server-side — run `npm run serve` separately
- * for the editor SPA.
+ * the same config files the browser SPA uses.
  *
  *   node scripts/serve-coop-gateway.mjs
  *     COOP_PORT   port to listen on        (default 8090)

@@ -9,14 +9,16 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = 9226;
-const WEB = 8903;
+const WEB = 8904; // its own port: proto.crud also claimed 8903, and running back-to-back raced its teardown
 
 const freePort = spawn('sh', ['-c', `lsof -ti:${WEB} | xargs kill 2>/dev/null; true`], { stdio: 'ignore' });
 await new Promise(r => freePort.on('exit', r));
 const srv = spawn('sh', ['-c', `python3 -m http.server ${WEB} --directory public > /tmp/bv-srv-${WEB}.log 2>&1`], { stdio: 'ignore' });
 await sleep(700);
 
-const freeChrome = spawn('sh', ['-c', "pkill -f 'user-data-dir=/tmp/bv-profile-p4' 2>/dev/null; true"], { stdio: 'ignore' });
+// Fresh profile each run: a reused one can serve stale JS modules from its HTTP cache, which would
+// test last run's app (or a mix of old index.html + new modules) instead of the current source.
+const freeChrome = spawn('sh', ['-c', "pkill -f 'user-data-dir=/tmp/bv-profile-p4' 2>/dev/null; rm -rf /tmp/bv-profile-p4; true"], { stdio: 'ignore' });
 await new Promise(r => freeChrome.on('exit', r));
 const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', `--remote-debugging-port=${PORT}`, '--user-data-dir=/tmp/bv-profile-p4', 'about:blank'], { stdio: 'ignore' });
 
@@ -44,14 +46,22 @@ try {
 
   await send('Page.enable');
   await send('Runtime.enable');
-  await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
-  for (let i = 0; i < 90; i++) {
-    if ((await evalJs('typeof window.__app').catch(() => '')) === 'function') break;
-    await sleep(200);
+  // Boot, with the re-navigation retry the other probes learned to need: headless Chrome here
+  // intermittently stalls module loading for tens of seconds after first paint (server logs show
+  // everything served immediately), so a long wait PLUS a retry is what absorbs it.
+  let booted = false;
+  for (let attempt = 0; attempt < 3 && !booted; attempt++) {
+    await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
+    for (let i = 0; i < 45; i++) {
+      if ((await evalJs('typeof window.__app').catch(() => '')) === 'function') { booted = true; break; }
+      await sleep(500);
+    }
+    if (!booted && attempt < 2) console.log('RENAV: renderer stalled, re-navigating (' + (attempt + 1) + '/2)');
   }
-  if (await evalJs('typeof window.__app') !== 'function') {
-    const pre = await evalJs('document.querySelector("pre")?.textContent ?? ""');
-    fail('editor app did not boot: ' + pre);
+  if (!booted) {
+    const diag = await evalJs(`JSON.stringify({ready:document.readyState, app:typeof window.__app,
+      pre:document.querySelector('pre')?.textContent?.slice(0,300) ?? null})`).catch(e => 'diag failed ' + e);
+    fail('editor app did not boot: ' + diag);
   }
 
   // ---- PART A: sensor "Add Output" grows taps + renders a second Out slot ----

@@ -88,9 +88,18 @@
         <!-- Shared fleet (M5 p3–4): other participants' deployed vehicles, add/remove for the host -->
         <div id="remote-fleet" hidden></div>
         <h3>Co-op</h3>
+        <!-- No gateway address to type: the gateway shares this server's port, so a joiner is
+             already pointed at the right place whenever the page came from the host. The address
+             only exists under Advanced, for the rare case of joining a world from a page that was
+             served somewhere else. -->
         <div id="coop-gw-fields">
-          <label>Gateway<input type="text" id="coop-gw-url" spellcheck="false" placeholder="ws://127.0.0.1:8090"></label>
           <label>Name<input type="text" id="coop-gw-name" maxlength="24" placeholder="you"></label>
+          <details id="coop-advanced" class="coop-advanced">
+            <summary>Advanced<span class="dim" id="coop-advanced-tag"></span></summary>
+            <label>Host address<input type="text" id="coop-host-addr" spellcheck="false" autocomplete="off"
+              placeholder="automatic"></label>
+            <div class="dim coop-hint" id="coop-host-addr-hint"></div>
+          </details>
         </div>
         <!-- Host on its own row above the Join row; both hide together once connected.
              The join code field takes the remaining width of the column. -->
@@ -103,6 +112,14 @@
         </div>
         <button id="coop-disconnect" hidden>Disconnect</button>
         <div id="coop-gw-code" class="coop-code" hidden></div>
+        <!-- The one thing a host has to share: a link that loads the app FROM this server and joins
+             this world. Selectable text (clipboard API needs https), with a Copy button that falls
+             back to a selection on plain http. -->
+        <div id="coop-invite-row" class="coop-invite-row" hidden>
+          <input type="text" id="coop-invite" readonly spellcheck="false" title="Send this to anyone on your network">
+          <button id="coop-copy" title="Copy the invite link">Copy</button>
+        </div>
+        <div class="dim coop-hint" id="coop-invite-alt" hidden></div>
         <h3>Status</h3>
         <div id="coop-gw-status" class="dim">not in a shared world</div>
       </div>

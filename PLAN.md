@@ -763,3 +763,91 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   until a world is actually joined/hosted** (`coopPanel.setConnectedLayout`/welcome flip `disabled`, not
   `hidden`). Covered in `world.tabs.mjs` (design buttons visible pre-connect + Deploy greyed + enabled
   on connect; Host above Join). Unit **246/246**; all 7 browser smokes green.
+
+## M6 — one server, one port (merged gateway + LAN hosting)
+
+The ops story used to be two commands (`npm run serve` for the files, `npm run serve:coop` for the
+shared world) and, for a joiner, two secrets: the host's IP **and** a second port. Both are gone.
+**`npm run serve` now serves the SPA *and* hosts the co-op gateway on the same port**, and a joiner
+needs only the world code — or nothing at all if they open the invite link.
+
+### Why one port is the right shape, not just fewer terminals
+`ws` attaches to an existing `http.Server` and consumes only the `upgrade` event, so the static
+`request` handler is untouched. The consequence is what matters: **page reachable ⇒ gateway
+reachable**. Previously a host could serve files on 8080, not start the gateway (or leave 8090
+blocked by the OS firewall), and participants saw a spinner with no explanation. One address, one
+firewall rule, one thing that can be down.
+
+### Confirmed decisions
+- **No gateway field.** The page's own origin *is* the gateway. The `Gateway` input is removed;
+  **Advanced → Host address** remains for the rare case of joining a world whose page you didn't
+  load (empty = origin; accepts `ip`, `ip:port`, `*.local`, `ws(s)://`, or a whole invite URL, and
+  an invite URL's `#join=` code is picked up from the field too).
+- **LAN-open by default**, because hosting is the whole point. `HOST=127.0.0.1` locks it down;
+  `NO_COOP=1` serves files only. No auth — a LAN/classroom tool, not an internet service.
+- **Auto-join from the invite link** (`#join=CODE`): remembered name else `Bot-NN`, with the World
+  view brought up first so you don't join a world you can't see. The hash survives a successful join
+  (a refresh rejoins) and is cleared by Disconnect and by a failed auto-join — *leave means leave*,
+  and a dead link can't retry itself on every refresh.
+
+### What was built
+- `src/net/invite.js` **(new, pure — no Node, no DOM, `ws`-free so the browser can import it)**:
+  `parseHostInput`, `buildWsUrl`, `buildInvite`, `joinCodeFromHash`, `normalizeCode`,
+  `pickLanInterfaces`, `buildServerInfo`.
+- `scripts/serve.mjs`: static handler + `GET /info` + the attached gateway on one port;
+  `PORT`/`HOST`/`NO_COOP`; startup banner prints the local URL plus one line **per LAN interface**,
+  and the macOS "allow incoming connections" note (Deny = participants load nothing).
+- `src/net/gateway.js`: `{ server }` injection (attach; don't `listen`; never close a server you were
+  merely handed), a dialable URL from `start()` on a wildcard bind, and a per-world `try/catch` sweep
+  around step + snapshot (`onStepError`) — a world that throws is logged once per distinct error and
+  skipped, because an uncaught exception would now take the file server down with it.
+- `GET /info` exists because a browser cannot ask for its own LAN IP: `{host, lan[], hostnames[],
+  port, secure, wsUrl, coop, worlds}`. `pickLanInterfaces()` ranks `en0`/`eth0`/`wlan0` first and
+  drops `utun*`, `awdl*`, `llw*`, `bridge*`, `vmnet`/`docker`/`veth`, hotspot `ap*`, loopback and
+  `169.254.*` — "first IPv4" on a laptop with VPN up advertises an address nobody can join (this
+  machine has 6 utun tunnels).
+- `public/index.html` + `style.css`: `<details id="coop-advanced">` with a live `→ ws://host:port`
+  validation hint and the override echoed in the collapsed summary (so a non-default target is
+  visible without opening it); `#coop-invite` + `Copy`; `#coop-invite-alt` "other networks" chips.
+- `public/app/coopPanel.js`: `_autoAddress` / `_resolveTarget` / `_syncAddressHint` /
+  `_syncAdvancedTag`, override-**only** persistence (legacy `bv.coop.url` is migrated, and its old
+  `ws://127.0.0.1:8090` default is *dropped* — migrated, it would silently shadow the automatic
+  address forever), `_fetchInfo` + `_publishInvite`/`_showInvite` (a host never publishes
+  `localhost`; the address comes from `/info`, and a joiner's link points at the gateway they
+  actually reached so forwarding works), `copyInvite` (clipboard API → `execCommand` → select + ⌘C,
+  because plain http is not a secure context), `autoJoinFromLink`, `_clearJoinHash`, `_failAutoJoin`.
+- `public/app/main.js`: new element map, `onDeepLink`, and a boot-time `coopPanel.autoJoinFromLink()`.
+
+### Bugs this pass caught
+- `originParts()` destructured `{host, port}` **with array syntax** → every origin lookup returned
+  null, so the automatic address silently never worked.
+- `familyIs()` uppercased only one side (`String('IPv4').toUpperCase() === 'IPv4'` is false) → every
+  interface filtered out; `/info` would have advertised `127.0.0.1` on every machine.
+- Family is `4`/`6` on older Node and `'IPv4'`/`'IPv6'` on newer → `familyOf()` now takes either and
+  falls back to inspecting the address.
+- A *probe* bug that cost real debugging time: `!getComputedStyle(el).display === "none"` parses as
+  `(!display) === "none"`, i.e. always false — unary `!` binds tighter than `===`. The merged probe
+  timed out on a perfectly correct invite until the poll's failure path started printing the panel's
+  live state (worth keeping: it names the broken step instead of saying "timeout").
+- Pre-existing flake, now fixed: `neurons.outputs.mjs` shared web port **8903** with
+  `proto.crud.mjs`, reused a stale Chrome profile, and still used the old 18-second boot loop with no
+  retry. It now owns port 8904, deletes its profile, and boots with 45×500ms + re-navigation ×2 plus
+  a `readyState`/`<pre>`/`__app` diagnostic on failure. (Orphan hazard worth remembering: probes
+  spawn `sh -c python3 -m http.server`, so `srv.kill()` kills the shell and can leave python
+  listening — the `lsof -ti:<port> | xargs kill` pre-clean is what saves the next run.)
+
+### Verified
+- Unit **260/260**. `tests/invite.test.js` ranks a macOS laptop (en0 + 6 utun + awdl/llw/bridge/vmnet
+  /ap + a link-local Thunderbolt) and Linux-style names (`enp0s3`, `wlan0`, docker/veth), tolerates
+  numeric `family`, honours `limit`, round-trips `buildInvite` → `parseHostInput`, and asserts the
+  rejection messages (`not a valid host`, `port number`, `IPv6 needs brackets`).
+- New probe **`tests/smoke/merged.serve.mjs`** (`npm run smoke:merged`, added to `npm run smoke`) —
+  the only probe that spawns the real `scripts/serve.mjs`. Asserts: one port serves `/` (html),
+  `/info`, and the `public/src` symlink, and refuses path traversal; `coop:true`; host+join
+  WebSocket handshakes **on that same port** (admin/participant); no `#coop-gw-url` remains; Advanced
+  collapsed with the serving origin as its placeholder and "automatic" hint; invite row hidden until
+  connected; `invite === http://<info.host>:<port>/#join=<code>` with no loopback host anywhere in it;
+  Copy produces either "Copied" or the ⌘C instruction; a Node observer joins by code; **a second page
+  opened at the invite URL joins with zero clicks** (host roster → 2) and lands on the World tab with
+  an empty address field; Disconnect clears the hash and the roster drops back to 1.
+- `npm run serve:coop` stays as a standalone gateway (a box that hosts worlds and serves no files).

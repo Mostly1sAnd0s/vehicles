@@ -1,12 +1,18 @@
 /**
  * Co-op sidebar panel (PLAN.md §Multi-User, phase M5 — UI phases 2–4).
  *
- * Sharing lives at the bottom of the World sidebar (the standalone tab was removed). One gateway
- * process hosts many coded worlds; this panel is the whole client side of it:
- *   - **Host** → `{type:'host'}` creates a fresh world, shows its 6-char code big, and tracks the
- *     live client count (gateway `roster` messages) next to the server address.
+ * Sharing lives at the bottom of the World sidebar (the standalone tab was removed). The gateway
+ * runs on the same port as this page (one process, `npm run serve`), so there is no server address
+ * to configure: the page's own origin IS the gateway. This panel is the whole client side of it:
+ *   - **Host** → `{type:'host'}` creates a fresh world, shows its 6-char code big plus a one-line
+ *     invite link (whose LAN address comes from the server's `GET /info`, because a browser cannot
+ *     discover its own), and tracks the live client count (gateway `roster` messages).
  *   - **Join** + code box → `{type:'join', code}` enters that world; wrong codes are refused by
  *     the gateway (error → surfaced in the status line).
+ *   - **Invite link** (`#join=CODE`) → `autoJoinFromLink()` prefills the code and connects, so a
+ *     pasted link is the entire join flow. The address lives under **Advanced** for the rare case
+ *     of joining a world from a page served somewhere else; it accepts `ip`, `ip:port`,
+ *     `name.local`, a full `ws://` URL, or a whole invite link (see `src/net/invite.js`).
  *   - **Deploy design** → pushes the current editor vehicle into the shared world (owner-only on
  *     the server: everyone drives their own bots, no one else's).
  *   - **▶/⏸/↺** session controls (host-only; admin on the server).
@@ -20,21 +26,31 @@
  * thin glue layer probed end to end by tests/smoke/coop.panel.mjs.
  */
 import CoopClient from '../src/net/client.js';
+import { parseHostInput, buildWsUrl, buildInvite, joinCodeFromHash, formatHostPort } from '../src/net/invite.js';
 
-const URL_KEY = 'bv.coop.url';
+const HOST_KEY = 'bv.coop.hostAddr';   // only ever an OVERRIDE; empty means "this server"
 const NAME_KEY = 'bv.coop.name';
-const DEFAULT_URL = 'ws://127.0.0.1:8090';
+// Pre-merge builds stored a full gateway URL (default ws://127.0.0.1:8090). Keep a genuine custom
+// gateway, but drop the old default: it would silently shadow the automatic same-origin address.
+const LEGACY_URL_KEY = 'bv.coop.url';
+const LEGACY_URL_DEFAULT = 'ws://127.0.0.1:8090';
 const MAX_FLEET = 50;
 const randName = () => 'Bot-' + String((Math.random() * 90 + 10) | 0);
+// Addresses that only work on this machine — never good enough to put in an invite link.
+const isLocalOnly = (h) => {
+  const s = String(h ?? '').toLowerCase();
+  return !s || s === 'localhost' || s.startsWith('127.') || s === '::1' || s.endsWith('.localhost');
+};
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export class CoopPanel {
   /**
-   * @param {object} ui element map: {url, name, row, host, join, joinCode, disconnect, code, status,
-   *                                   deploy, controls, start, pause, reset, remoteFleet}
-   * @param {{client?:CoopClient, getVehicle?:(()=>object)}} [opts]
+   * @param {object} ui element map: {hostAddr, advanced, advancedTag, hostAddrHint, name, row, host,
+   *                                   join, joinCode, disconnect, code, status, deploy, invite,
+   *                                   inviteRow, inviteAlt, copyInvite, remoteFleet}
+   * @param {{client?:CoopClient, getVehicle?:(()=>object), onDeepLink?:(()=>void)}} [opts]
    */
-  constructor(ui, { client, getVehicle, onEditDesign, onConnectStart, onDisconnectStart } = {}) {
+  constructor(ui, { client, getVehicle, onEditDesign, onConnectStart, onDisconnectStart, onDeepLink } = {}) {
     // Fail fast with the missing element's name rather than a cryptic null error mid-constructor.
     for (const [k] of Object.entries(ui)) if (!ui[k]) throw new Error('CoopPanel: missing UI element "' + k + '"');
     this.ui = ui;
@@ -44,14 +60,33 @@ export class CoopPanel {
     // onConnectStart fires when Host/Join is pressed; onDisconnectStart when Disconnect is.
     this.onConnectStart = onConnectStart;
     this.onDisconnectStart = onDisconnectStart;
+    this.onDeepLink = onDeepLink;
     this.client = client ?? new CoopClient();
     this._wasConnected = false; // for "unexpected drop" handling on `closed`
     this._userLeft = false;     // set by an intentional Disconnect so `closed` stays quiet
 
-    // Remember where you were and what you're called.
-    this.ui.url.value = localStorage.getItem(URL_KEY) || DEFAULT_URL;
+    // What you're called, and an address override if you ever need one (see the class header).
+    this._auto = this._autoAddress();
+    const savedOverride = this._loadOverride();
+    this.ui.hostAddr.value = savedOverride ?? '';
     this.ui.name.value = localStorage.getItem(NAME_KEY) || '';
     if (!this.ui.name.value) this.ui.name.placeholder = randName();
+    // Open Advanced only when it is actually needed: no automatic address (opened from disk), or a
+    // saved override the user should be able to see they are carrying.
+    if (!this._auto || savedOverride) this.ui.advanced.open = true;
+    this._syncAddressHint();
+    this._syncAdvancedTag();
+    this.ui.advanced.addEventListener('toggle', () => this._syncAdvancedTag());
+    this.ui.hostAddr.addEventListener('input', () => { this._syncAddressHint(); this._syncAdvancedTag(); });
+    this.ui.copyInvite.addEventListener('click', () => this.copyInvite());
+    // An alternate-interface chip swaps the invite link (multi-homed host: Wi-Fi vs Ethernet).
+    this.ui.inviteAlt.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-addr]');
+      if (chip && this.client.code) {
+        this._inviteHost = chip.dataset.addr;
+        this._showInvite();
+      }
+    });
 
     // Codes are spoken back; normalise as you type.
     this.ui.joinCode.addEventListener('input', (e) => {
@@ -101,6 +136,7 @@ export class CoopPanel {
         // Both design buttons are always visible now; welcome is what un-greys Deploy.
         this.ui.deploy.disabled = false;
         this.renderFleet();
+        this._publishInvite(); // the world code exists now, so the shareable link can too
       } else if (msg.type === 'roster') {
         // membership changed — refresh the client count; do NOT run this on snapshots, or the
         // 15Hz stream would clobber event messages like "deployed…" in the status line
@@ -117,6 +153,8 @@ export class CoopPanel {
         // The host left: the gateway dissolved the world. Return home (layout back to Host/Join).
         this._wasConnected = false;
         this.ui.status.textContent = `the host left — ${c.code ?? 'the world'} was closed`;
+        this._autoJoined = false;
+        this._clearJoinHash(); // that world is gone; a refresh must not try to rejoin it
         this.client.close();
         this.setConnectedLayout(false);
         this.setBusy(false);
@@ -140,6 +178,27 @@ export class CoopPanel {
     return this.connect({ mode: 'join', code }, `joining ${code}…`);
   }
 
+  /**
+   * The invite link did its job: `http://<host>:<port>/#join=CODE` was opened, so this page was
+   * served BY the host and the address is already correct. Prefill the code, let go of any stale
+   * Advanced override (the link you just followed beats an address remembered from last week), and
+   * connect with your remembered name — or the same Bot-NN the form would have used.
+   * @returns {boolean} true when a join was started from the URL.
+   */
+  autoJoinFromLink() {
+    const code = joinCodeFromHash(location.hash) || joinCodeFromHash(location.search);
+    if (!code) return false;
+    if (this.client.status === 'connecting' || this.client.status === 'connected') return false;
+    this.ui.joinCode.value = code;
+    if (this.ui.hostAddr.value.trim()) this.ui.hostAddr.value = ''; // the link names its own host
+    this._syncAddressHint();
+    this._syncAdvancedTag();
+    this._autoJoined = true;
+    this.onDeepLink?.(); // main.js: show the World tab, or you'd auto-join into a screen you can't see
+    this.join();
+    return true;
+  }
+
   /** Push the current editor design into the shared world (owner-only on the server). */
   deploy() {
     const c = this.client;
@@ -159,35 +218,209 @@ export class CoopPanel {
     this._userLeft = true;
     const code = this.client.code;
     this._wasConnected = false;
+    this._autoJoined = false;
+    this._clearJoinHash(); // "leave" means leave: a refresh must not drop you straight back in
     this.client.close(); // server prunes this participant's bots on socket close
     this.setConnectedLayout(false);
     this.setBusy(false);
     this.ui.status.textContent = `left ${code ?? 'the world'} — your bots were removed`;
   }
 
+  // ---- addressing ---------------------------------------------------------
+  /** The server that served this page, which is also the gateway (one port, one process). */
+  _autoAddress() {
+    const r = parseHostInput('', { origin: location.href, defaultPort: location.port || 8080 });
+    return r.ok ? { ...r, display: formatHostPort(r) } : null;
+  }
+
+  /** A remembered override, minus the pre-merge `ws://127.0.0.1:8090` default that would shadow it. */
+  _loadOverride() {
+    const saved = localStorage.getItem(HOST_KEY);
+    if (saved) return saved;
+    const legacy = localStorage.getItem(LEGACY_URL_KEY);
+    if (!legacy) return null;
+    localStorage.removeItem(LEGACY_URL_KEY);
+    if (legacy === LEGACY_URL_DEFAULT) return null;
+    const r = parseHostInput(legacy, { origin: location.href });
+    return r.ok ? formatHostPort(r) : null;
+  }
+
+  /** Live feedback in Advanced: what the field currently means (or why it doesn't). */
+  _syncAddressHint() {
+    const raw = this.ui.hostAddr.value.trim();
+    const auto = this._auto;
+    this.ui.hostAddr.placeholder = auto ? auto.display : '192.168.1.20:8080';
+    if (!raw) {
+      this.ui.hostAddrHint.textContent = auto
+        ? `automatic — this page came from ${auto.display}`
+        : 'this page was opened from disk, so type the host\u2019s IP address (and its port)';
+      return;
+    }
+    const r = this._resolveTarget();
+    this.ui.hostAddrHint.textContent = r.ok
+      ? `\u2192 ${r.url}${r.code ? ` \u00b7 code ${r.code}` : ''}`
+      : '\u26a0 ' + r.error;
+  }
+
+  /** Keep the collapsed summary honest: show the override without making people open it. */
+  _syncAdvancedTag() {
+    const raw = this.ui.hostAddr.value.trim();
+    this.ui.advancedTag.textContent = raw ? ` \u00b7 ${raw}` : '';
+  }
+
+  /** Resolve the field (possibly empty) into a concrete socket target, or a usable error. */
+  _resolveTarget() {
+    const r = parseHostInput(this.ui.hostAddr.value.trim(), {
+      origin: location.href,
+      defaultPort: Number(location.port) || 8080,
+    });
+    if (!r.ok) return r;
+    return { ...r, url: buildWsUrl(r), display: formatHostPort(r) };
+  }
+
   async connect(opts, pendingMsg) {
-    const url = this.ui.url.value.trim();
-    if (!url) { this.ui.status.textContent = 'enter the gateway address (ws://host:port)'; return; }
+    const target = this._resolveTarget();
+    if (!target.ok) {
+      this.ui.status.textContent = '\u26a0 ' + target.error;
+      this.ui.advanced.open = true; // the field that needs fixing lives in there
+      this._failAutoJoin();
+      return;
+    }
+    this._target = target;
+    // A whole invite link pasted into Advanced carries its own code: use it, don't make them
+    // retype the six characters that were already in the thing they copied.
+    if (target.code && !this.ui.joinCode.value.trim()) this.ui.joinCode.value = target.code;
     const name = this.ui.name.value.trim() || randName();
     this.ui.name.value = name;
-    this.ui.url.value = url; // normalise
-    localStorage.setItem(URL_KEY, url);
     localStorage.setItem(NAME_KEY, name);
+    // Only an override is worth remembering. Persisting the automatic address would pin one IP and
+    // break the next time the host's DHCP lease moves.
+    if (target.source === 'input') localStorage.setItem(HOST_KEY, target.display);
+    else localStorage.removeItem(HOST_KEY);
+    this._syncAdvancedTag();
 
     this.onConnectStart?.({ mode: opts.mode }); // "Joining world…" overlay + clear (main.js)
     this.setBusy(true);
     this.ui.status.textContent = pendingMsg;
     try {
-      await this.client.connect(url, name, opts); // resolves on `welcome`
+      await this.client.connect(target.url, name, opts); // resolves on `welcome`
       this._wasConnected = true;
-      this.ui.code.textContent = this.client.code ?? '—';
+      this._autoJoined = false;
+      this.ui.code.textContent = this.client.code ?? '\u2014';
       this.setConnectedLayout(true);
       this.setBusy(false); // success path: Disconnect must be clickable (host/join are hidden now)
       this.renderStatus(this.client.mode === 'host' ? 'you host' : 'you joined');
     } catch (e) {
-      this.ui.status.textContent = '✗ ' + (e?.message ?? e); // e.g. "no such world: ZZZZZZ"
+      // Say what was actually dialled: "could not reach 192.168.1.44:8080" beats a bare "failed" when
+      // the host is on another port, or the firewall denied Node.
+      const host = `\u2717 could not reach ${target.display}`;
+      this.ui.status.textContent = target.source === 'origin'
+        ? `${host} \u2014 is the host running \`npm run serve\`?`
+        : `${host} \u2014 check the address under Advanced (${target.display})`; 
+      if (e?.message && !/connection failed|timed out/i.test(String(e.message))) {
+        this.ui.status.textContent = '\u2717 ' + e.message; // a server refusal (bad code, …) is specific: keep it
+      }
       this.setBusy(false);
+      this._failAutoJoin(); // a deep link that can't work must not retry itself on every refresh
     }
+  }
+
+  // ---- invite link --------------------------------------------------------
+  /** `GET /info` from the server that served this page: LAN addresses + port. Cached per session. */
+  async _fetchInfo() {
+    if (this._info) return this._info;
+    try {
+      const r = await fetch('/info', { cache: 'no-store' });
+      if (!r.ok) return null;
+      this._info = await r.json();
+      return this._info;
+    } catch { return null; } // opened from disk, or a static host with no /info: fall back quietly
+  }
+
+  /**
+   * Build the shareable link once we have a world code. A browser cannot report its own LAN IP, so
+   * a host asks the server (`/info`) and never publishes `localhost` in a link meant for other
+   * people; a joiner's link points at the gateway they actually connected to, so forwarding it works.
+   */
+  async _publishInvite() {
+    const code = this.client.code;
+    if (!code) return;
+    let host = this._target?.host ?? location.hostname;
+    let port = this._target?.port ?? (Number(location.port) || 8080);
+    const secure = this._target?.secure ?? location.protocol === 'https:';
+    this._inviteSecure = secure;
+    this._inviteHost = null;
+    if (this.client.mode === 'host' && isLocalOnly(host)) {
+      const info = await this._fetchInfo();
+      if (info?.host && !isLocalOnly(info.host)) host = info.host;
+      if (info?.port) port = Number(info.port) || port;
+    }
+    this._inviteDefaults = { host, port };
+    // A multi-homed host (Wi-Fi + Ethernet + VPN) should be able to pick which network to invite on.
+    const info = this.client.mode === 'host' ? await this._fetchInfo() : null;
+    const alts = (info?.lan ?? []).filter((i) => i.address && i.address !== host).slice(0, 4);
+    if (alts.length) {
+      this.ui.inviteAlt.hidden = false;
+      this.ui.inviteAlt.innerHTML = 'other networks: ' + alts
+        .map((i) => `<span class="coop-alt" data-addr="${esc(i.address)}" title="advertise on ${esc(i.name)}">${esc(i.address)}</span>`)
+        .join(' \u00b7 ');
+    } else {
+      this.ui.inviteAlt.hidden = true;
+      this.ui.inviteAlt.innerHTML = '';
+    }
+    this._showInvite();
+  }
+
+  _showInvite() {
+    const { host, port } = this._inviteDefaults ?? {};
+    if (!host || !this.client.code) return;
+    this._invite = buildInvite({
+      host: this._inviteHost || host, port, code: this.client.code, secure: this._inviteSecure,
+    });
+    this.ui.invite.value = this._invite;
+    this.ui.inviteRow.hidden = false;
+  }
+
+  /**
+   * Copy the invite. `navigator.clipboard` needs a secure context and a LAN is plain http, so the
+   * selection route is the normal path here, not a rare fallback; worst case the text is left
+   * selected for ⌘C.
+   */
+  async copyInvite() {
+    const text = this.ui.invite.value || this._invite;
+    if (!text) return;
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); copied = true; }
+    } catch { /* permission denied / not a secure context → fall through */ }
+    if (!copied) {
+      try {
+        this.ui.invite.focus();
+        this.ui.invite.select();
+        copied = document.execCommand?.('copy') ?? false;
+      } catch { copied = false; }
+    }
+    if (copied) {
+      this.ui.copyInvite.textContent = 'Copied';
+      clearTimeout(this._copyTimer);
+      this._copyTimer = setTimeout(() => { this.ui.copyInvite.textContent = 'Copy'; }, 1200);
+    } else {
+      this.ui.invite.select();
+      this.ui.status.textContent = '\u26a0 copy blocked by the browser \u2014 the link is selected, press \u2318C';
+    }
+  }
+
+  /** Drop `#join=…` so a manual Disconnect (or a failed auto-join) isn't undone by a refresh. */
+  _clearJoinHash() {
+    try {
+      if (joinCodeFromHash(location.hash)) history.replaceState(null, '', location.pathname + location.search);
+    } catch { /* file:// or a sandboxed history: nothing to clear */ }
+  }
+
+  _failAutoJoin() {
+    if (!this._autoJoined) return;
+    this._autoJoined = false;
+    this._clearJoinHash();
   }
 
   // ---- layout -------------------------------------------------------------
@@ -198,9 +431,15 @@ export class CoopPanel {
     this.ui.disconnect.hidden = !on;
     this.ui.code.hidden = !on;
     this.ui.deploy.disabled = !on; // grey out until a world is actually joined/hosted
+    this.ui.inviteRow.hidden = !on;
     if (!on) {
       this.ui.remoteFleet.hidden = true;
       this.ui.remoteFleet.innerHTML = '';
+      this.ui.inviteAlt.hidden = true;
+      this.ui.inviteAlt.innerHTML = '';
+      this.ui.invite.value = '';
+      this._invite = null;
+      this._inviteHost = null;
     }
     this._setWorldControlsVisibility();
   }
@@ -225,7 +464,7 @@ export class CoopPanel {
     const you = c.you ? ` · ${esc(c.you.name)} (${c.you.role})` : '';
     this.ui.status.textContent =
       `${lead ?? (c.mode === 'host' ? 'hosting' : 'in world')} ${this.client.code ?? ''}` +
-      ` · ${this.ui.url.value.trim() || c.url}` +
+      ` · ${this._target?.display ?? c.url}` +
       ` · ${n} client${n === 1 ? '' : 's'}${you}`;
   }
 

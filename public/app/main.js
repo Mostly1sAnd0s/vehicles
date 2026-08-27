@@ -213,12 +213,19 @@ async function main() {
 
   // ---------- co-op sidebar panel (always in the DOM with the World page) ----------
   const coopPanel = new CoopPanel({
-    url: $('coop-gw-url'), name: $('coop-gw-name'), fields: $('coop-gw-fields'), row: $('coop-gw-row'),
+    hostAddr: $('coop-host-addr'), advanced: $('coop-advanced'), advancedTag: $('coop-advanced-tag'),
+    hostAddrHint: $('coop-host-addr-hint'),
+    name: $('coop-gw-name'), fields: $('coop-gw-fields'), row: $('coop-gw-row'),
     host: $('coop-host'), join: $('coop-join'), joinCode: $('coop-join-code'),
     disconnect: $('coop-disconnect'), code: $('coop-gw-code'), status: $('coop-gw-status'),
     deploy: $('coop-deploy'), editDesign: $('coop-edit'),
+    invite: $('coop-invite'), inviteRow: $('coop-invite-row'), inviteAlt: $('coop-invite-alt'),
+    copyInvite: $('coop-copy'),
     remoteFleet: $('remote-fleet'),
   }, {
+    // An invite link (`#join=CODE`) connects without a click, so bring the World view up first —
+    // otherwise you would join a shared world you cannot see.
+    onDeepLink: () => { activate('world'); initWorldSim(); },
     // World mode transition (Sandbox ⇄ Co-Op tabs + canvas overlay): shown when the user presses
     // Host/Join (the world clears to "Joining world…") and again on Disconnect ("Leaving world…").
     // The Sandbox tab is disabled/enabled from the client.onMessage handler below, once the shared
@@ -419,6 +426,10 @@ async function main() {
     const v = JSON.parse(await load('config/version.json'));
     if (v && v.version) $('app-brand').textContent = `Vehicle Sandbox v${v.version}`;
   } catch { /* version file optional until a build has run; keep the static title */ }
+
+  // A deep-linked invite (`#join=CODE`) is the whole join flow: prefill + connect, no clicks. Run
+  // last, so the panel, the World sim and the tab wiring all exist by the time it fires.
+  coopPanel.autoJoinFromLink();
 
   // debug/test handle (used by headless smoke tests)
   window.__app = () => ({ state, get worldSim() { return worldSim; }, get editor() { return editor; }, get coopPanel() { return coopPanel; } });

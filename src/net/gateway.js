@@ -12,6 +12,12 @@
  * One fixed-dt step + snapshot-broadcast loop iterates every active world. Transport-agnostic
  * `Session` still owns all rules — this file only routes sockets to worlds, so it's unit-testable
  * over a real socket with no browser.
+ *
+ * Two deployment shapes, same code:
+ *   createCoopGateway({ Matter, configs, port })   → standalone: owns its http server (+ /health)
+ *   createCoopGateway({ Matter, configs, server }) → ATTACHED to a server you already have, so the
+ *     SPA and the gateway share one port and one process (`npm run serve`). `ws` listens only for
+ *     the `upgrade` event, which a plain static file server never sees, so the two coexist.
  */
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
@@ -31,10 +37,13 @@ function randomCode(used) {
   return code;
 }
 
-export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0, host = '127.0.0.1', broadcastHz = 15 } = {}) {
+export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0, host = '127.0.0.1', broadcastHz = 15, server: injectedServer = null, onStepError = null } = {}) {
   const worlds = new Map(); // code -> {code, session, createdAt}
 
-  const server = http.createServer((req, res) => {
+  // Attached mode reuses the caller's server (single-port hosting); standalone mode owns one and
+  // answers /health on it. Everything below is identical either way.
+  const ownsServer = !injectedServer;
+  const server = injectedServer ?? http.createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ worlds: worlds.size }));
@@ -114,27 +123,55 @@ export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0,
     socket.on('error', () => {}); // never let a flaky socket crash a world
   });
 
-  // One loop serves every world (a per-world interval would pin the loop in tests).
-  const simTimer = setInterval(() => { for (const w of worlds.values()) w.session.stepOnce(); }, dtMs);
-  const bcastTimer = setInterval(() => { for (const w of worlds.values()) w.session.broadcast(w.session.currentSnapshotWire()); }, Math.max(30, Math.round(1000 / broadcastHz)));
+  // One loop serves every world (a per-world interval would pin the loop in tests). A step or a
+  // broadcast that throws must never take the process with it: when the gateway shares a port with
+  // the SPA, an uncaught exception here would also kill every file request. Worlds are isolated
+  // from each other, and one bad world is reported (once per error) instead of crashing the rest.
+  const failed = new Set();
+  const sweep = (label, fn) => {
+    for (const [code, w] of worlds) {
+      try { fn(w); failed.delete(code); }
+      catch (err) {
+        const key = code + ':' + (err?.message ?? err);
+        if (!failed.has(key)) {
+          failed.add(key);
+          const msg = `world ${code} ${label} failed: ${err?.message ?? err}`;
+          if (onStepError) { try { onStepError(err, code, label); } catch {} }
+          else console.error('[coop] ' + msg);
+        }
+      }
+    }
+  };
+  const simTimer = setInterval(() => sweep('step', (w) => w.session.stepOnce()), dtMs);
+  const bcastTimer = setInterval(() => sweep('snapshot', (w) => w.session.broadcast(w.session.currentSnapshotWire())), Math.max(30, Math.round(1000 / broadcastHz)));
   simTimer.unref?.(); bcastTimer.unref?.(); // don't pin the event loop in tests
 
-  const ready = new Promise((resolve) => server.listen(port, host, () => resolve()));
+  // Attached: the caller owns listening (and closing), so just wait for whatever it is doing.
+  const ready = ownsServer
+    ? new Promise((resolve) => server.listen(port, host, () => resolve()))
+    : (server.listening ? Promise.resolve() : new Promise((resolve) => server.once('listening', resolve)));
+
 
   return {
     worlds,
     /** Resolve once listening; returns the connectable ws url + the real (possibly ephemeral) port. */
     async start() {
       await ready;
-      const a = server.address();
-      return { url: `ws://${a.address}:${a.port}`, port: a.port };
+      const a = server.address() ?? { address: host, port };
+      // A wildcard bind reports 0.0.0.0, which is not something you can dial — report a reachable
+      // loopback URL and let the caller derive LAN URLs from it.
+      const dialable = (a.address === '0.0.0.0' || a.address === '::') ? '127.0.0.1' : a.address;
+      return { url: `ws://${dialable}:${a.port}`, port: a.port, address: a.address };
     },
+    /** true when this gateway created (and therefore closes) its own HTTP server. */
+    ownsServer,
     async close() {
       clearInterval(simTimer);
       clearInterval(bcastTimer);
       for (const s of wss.clients) s.terminate?.();
       await new Promise((r) => (wss.close ? wss.close(r) : r()));
-      await new Promise((r) => server.close(r));
+      // Never close a server we were merely attached to — the static site would go down with it.
+      if (ownsServer) await new Promise((r) => server.close(r));
     },
   };
 }

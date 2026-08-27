@@ -100,7 +100,7 @@ try {
     };
 
     // 2. Host: a fresh world appears with its code; the layout swaps to Disconnect.
-    $('coop-gw-url').value = 'ws://127.0.0.1:${GW_PORT}';
+    $('coop-host-addr').value = 'ws://127.0.0.1:${GW_PORT}';
     $('coop-gw-name').value = 'smoke';
     $('coop-host').click();
     let code;

@@ -88,7 +88,7 @@ try {
       rec.designRow = { editShown: !$('coop-edit').hidden, deployShown: !$('coop-deploy').hidden,
         deployDisabled: $('coop-deploy').disabled, hostAboveJoin: hostR.bottom <= joinR.top + 1 };
       // Host: the world clears to "Joining world…" then the shared world appears; Sandbox is disabled.
-      $('coop-gw-url').value = 'ws://127.0.0.1:${GW_PORT}'; $('coop-gw-name').value = 'tabchk';
+      $('coop-host-addr').value = 'ws://127.0.0.1:${GW_PORT}'; $('coop-gw-name').value = 'tabchk';
       $('coop-host').click();
       await sleep(60); // the overlay is up before the socket round-trip settles
       rec.joiningOverlay = { shown: !$('world-transition').hidden, msg: $('world-transition-msg').textContent };
