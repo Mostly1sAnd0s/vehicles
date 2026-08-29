@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import Matter from 'matter-js';
 import { createCoopGateway } from '../../src/net/gateway.js';
 
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = 9245;
 const WEB = 8925;
 const GW_PORT = 8975;

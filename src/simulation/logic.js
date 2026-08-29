@@ -28,14 +28,6 @@ const GATES = {
   gate_not: { name: 'NOT', inputs: 1 },
 };
 
-export function isLogicGate(type) {
-  return type in GATES;
-}
-
-export function gateName(type) {
-  return GATES[type]?.name ?? '?';
-}
-
 /** Number of input ports a gate type expects (NOT = 1, the rest = 2). */
 export function gateInputCount(type) {
   return GATES[type]?.inputs ?? 0;
@@ -158,10 +150,16 @@ export function evaluateLogicGates(vehicle, valueOf) {
  *
  * Two docs that differ only in their internal component/gate ids (as produced
  * by {@link cloneVehicleForConversion}) get the SAME signature; two docs that
- * differ in a component's type/props/placement, in the wiring topology, or in
- * the body color get DIFFERENT signatures. That is exactly what the propagation
- * "config differs" guard needs: once an instance is converted its signature
- * matches the host's, so the same pair never re-fires (idempotency).
+ * differ in a component's type/props/placement/polarity/output taps, in the
+ * wiring topology (endpoints, ports, weight, polarity), or in the body color
+ * get DIFFERENT signatures. That is exactly what the propagation "config
+ * differs" guard needs: once an instance is converted its signature matches
+ * the host's, so the same pair never re-fires (idempotency).
+ *
+ * Ports and polarities are part of "topology" here: a wire flipped from tap
+ * `out` to tap `out1`, or from excitatory to inhibitory, is a genuinely
+ * different configuration — omitting them let a real conversion be skipped as
+ * "configs already match".
  */
 export function vehicleSignature(doc) {
   const d = doc ?? {};
@@ -170,6 +168,8 @@ export function vehicleSignature(doc) {
     l: c.local ? [round3(c.local.x), round3(c.local.y)] : null,
     r: c.localRotation != null ? round3(c.localRotation) : 0,
     p: c.props ?? null,
+    pol: c.polarity ?? null,   // normal/inverted, forward/reverse — a real config difference
+    o2: c.outputs ?? null,     // per-instance output taps (§4.2 multi-output)
   }));
   // Node props are part of the signature: two Neurons that differ only in
   // threshold/shape/spline are genuinely different configs (propagation must
@@ -183,7 +183,10 @@ export function vehicleSignature(doc) {
   const wires = (d.wires ?? []).map(w => [
     ord[w.from?.componentId] ?? String(w.from?.componentId),
     ord[w.to?.componentId] ?? String(w.to?.componentId),
+    w.from?.port ?? 'out',
+    w.to?.port ?? 'drive',
     w.weight ?? 1,
+    w.polarity ?? null,
   ]);
   return JSON.stringify({ c: comps, g: gates, w: wires, col: d.body?.color ?? null });
 }

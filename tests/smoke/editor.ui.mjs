@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = 9225;
 const WEB = 8901;
 
@@ -390,7 +390,61 @@ try {
   if (!gtest.hasDigital) fail('logic gates: a selected sensor must expose a Digital toggle in the inspector');
   if (!gtest.digitalSetOk) fail('logic gates: toggling Digital did not set the sensor props.digital');
 
-  ok('editor: placed at snap point, wired, drag-snapped sR with wire following; 4x4 body-color picker works + editor canvas shows the color; vehicle-detection sensor placeable with Aim+Range+FOV; logic gates placeable + per-gate connection slots match arity (AND = 2 in + 1 out) + drive correctly-ported wires + per-sensor digital toggle');
+  // --- OUT SELECTOR MUST NOT DESTROY FAN-OUT WIRES: a source tap may legitimately feed
+  //     several destinations (created from each destination's In slot). Changing/clearing the
+  //     source's Out dropdown used to delete EVERY wire from that tap — silent data loss.
+  const fan = await evalJs(`
+    (async () => {
+      const app = window.__app();
+      const v = app.state.vehicle;
+      const canvas = document.getElementById('editor-canvas');
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const placeWheel = () => {
+        const btn = [...document.querySelectorAll('#palette button')].find(b => b.textContent.includes('Powered Wheel'));
+        btn.click();
+        const r = canvas.getBoundingClientRect();
+        const scale = Math.min(canvas.clientWidth / 320, canvas.clientHeight / 240);
+        const cx = r.left + canvas.clientWidth / 2, cy = r.top + canvas.clientHeight / 2;
+        const pt = { x: cx + (-40 + 80 / 3) * scale, y: cy + (-20) * scale };
+        canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+        canvas.dispatchEvent(new MouseEvent('click', { clientX: pt.x, clientY: pt.y, bubbles: true }));
+      };
+      // A wire-free source: the vehicle-detection sensor placed earlier.
+      const vds = v.components.find(c => c.type === 'vehicle_detection_sensor');
+      if (!vds) return { error: 'no vehicle_detection_sensor to fan out from' };
+      if (v.wires.some(w => w.from.componentId === vds.id)) return { error: 'vds unexpectedly already wired' };
+      // Fan the tap out to TWO wheels, wiring each from its own In selector.
+      placeWheel();
+      const w1 = v.components[v.components.length - 1];
+      let sel = document.querySelector('#inspector #conn-in-drive');
+      if (!sel) return { error: 'no In selector on the freshly placed wheel' };
+      sel.value = vds.id + '|out'; sel.dispatchEvent(new Event('change'));
+      placeWheel();
+      const w2 = v.components[v.components.length - 1];
+      sel = document.querySelector('#inspector #conn-in-drive');
+      sel.value = vds.id + '|out'; sel.dispatchEvent(new Event('change'));
+      const fanWires = () => v.wires.filter(w => w.from.componentId === vds.id && w.from.port === 'out');
+      if (fanWires().length !== 2) return { error: 'expected 2 fan-out wires from the vds tap, got ' + fanWires().length };
+      // Select the SOURCE and inspect its Out slot: it must show the FIRST wire and HINT at the fan-out.
+      const li = [...document.querySelectorAll('#placed-list li')].find(x => x.textContent.includes(vds.id));
+      if (!li) return { error: 'vds not found in placed list' };
+      li.click();
+      const outSel = document.querySelector('#inspector #conn-out-out');
+      if (!outSel) return { error: 'no Out selector on the selected sensor' };
+      const shows = outSel.value;
+      const hint = /fan-out/.test(document.querySelector('#inspector .conn').textContent);
+      // Clearing the Out slot must remove ONLY the wire it shows (w1's) — w2's fan-out survives.
+      outSel.value = ''; outSel.dispatchEvent(new Event('change'));
+      const survivors = fanWires().map(w => w.to.componentId);
+      return { shows, hint, survivors, w1Id: w1.id, w2Id: w2.id };
+    })()
+  `);
+  if (fan.error) fail('out-selector fan-out: ' + fan.error);
+  if (fan.shows !== 'act|' + fan.w1Id) fail('out-selector: selector did not display the FIRST fan-out wire (expected act|' + fan.w1Id + ', got ' + fan.shows + ')');
+  if (!fan.hint) fail('out-selector: a tap with several wires must hint the extra ones instead of lying: ' + JSON.stringify(fan));
+  if (!Array.isArray(fan.survivors) || fan.survivors.length !== 1 || fan.survivors[0] !== fan.w2Id) fail('out-selector: editing the Out slot destroyed the other fan-out wire (expected only w2\'s wire to survive, got ' + JSON.stringify(fan.survivors) + ')');
+
+  ok('editor: placed at snap point, wired, drag-snapped sR with wire following; 4x4 body-color picker works + editor canvas shows the color; vehicle-detection sensor placeable with Aim+Range+FOV; logic gates placeable + per-gate connection slots match arity (AND = 2 in + 1 out) + drive correctly-ported wires + per-sensor digital toggle; Out selector replaces only its own wire (fan-out survives, +N hint shown)');
 } catch (e) {
   fail(e.stack ?? String(e));
 }

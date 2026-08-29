@@ -19,9 +19,12 @@ const optNum = (v) => (v == null || !Number.isFinite(v) ? null : v); // keep "ab
 
 function normalizeBot(b) {
   return {
-    id: b?.id, protoId: b?.protoId, owner: b?.owner ?? null,
+    id: b?.id, protoId: b?.protoId, owner: b?.owner ?? null, ownerToken: b?.ownerToken ?? null,
     x: num(b?.x), y: num(b?.y), angle: num(b?.angle), vx: num(b?.vx), vy: num(b?.vy),
-    w: num(b?.w, 80), h: num(b?.h, 40), color: b?.color ?? '#cc3333',
+    // The fallback must match DEFAULT_BODY_COLOR (public/app/color.js) and worldSim.snapshot()'s
+    // fallback — it used to be #cc3333 red here, which re-introduced the red-bot bug for any
+    // sender that omitted a color (worldSim carries a comment demanding the two stay in sync).
+    w: num(b?.w, 80), h: num(b?.h, 40), color: b?.color ?? '#4da3ff',
     comps: Array.isArray(b?.comps)
       ? b.comps.map(c => ({ id: c?.id, x: num(c?.x), y: num(c?.y), type: c?.type, range: optNum(c?.range) }))
       : [],
@@ -67,6 +70,20 @@ export class CoopClient {
     this.lastError = null;
     this._subs = new Set();
     this._resolveWelcome = null;
+  }
+
+  /**
+   * True when a (normalized) snapshot bot belongs to THIS client. Keyed on the participant
+   * TOKEN when available (unique by construction); falls back to the display name for servers
+   * that predate `ownerToken` — names can collide (two people type the same one, or the random
+   * Bot-NN default draws twice), which used to mis-attribute the "my bots" highlight, the
+   * popup's edit affordance, and the fleet's "· other" label.
+   */
+  isMine(b) {
+    const you = this.you;
+    if (!you) return false;
+    if (you.token != null && b?.ownerToken != null) return b.ownerToken === you.token;
+    return b?.owner != null && b.owner === you.name;
   }
 
   /** Subscribe to every inbound message. Returns an unsubscribe function. */
@@ -152,6 +169,9 @@ export class CoopClient {
   // Shared-world element edits (host-only on the server; participants get refusal errors).
   addElement(element) { return this._send({ type: 'addElement', element }); }
   moveElement(id, x, y) { return this._send({ type: 'moveElement', id, x, y }); }
+  // Non-positional inspector edits (rotation/scale/properties); streams a patch, the server
+  // broadcasts the full element list back to everyone.
+  updateElement(id, patch) { return this._send({ type: 'updateElement', id, patch }); }
   removeElement(id) { return this._send({ type: 'removeElement', id }); }
   setElements(elements) { return this._send({ type: 'setElements', elements }); } // host seeds the world at host-time
   // Shared-world bot reposition (host-only on the server; participants get refusal errors).

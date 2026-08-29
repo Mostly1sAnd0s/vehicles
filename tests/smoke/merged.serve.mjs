@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const APP = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = 9235;          // CDP
 const WEB = 8915;           // the ONE port: static files + gateway
 const PROFILE = '/tmp/bv-profile-merged';

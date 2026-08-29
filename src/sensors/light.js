@@ -119,19 +119,7 @@ export function lightLevelNormalized(position, sources, config, aimOpts = {}) {
   return { level: best, distance: best > 0 ? bestD : null };
 }
 
-/**
- * Map a raw light level onto [0,0..1] so the sensor's useful band spans its
- * effective range: 0 at/ below `detectionThreshold`, rising linearly to 1 at
- * full scale (T * `fullScaleRatio`), then clamped. This is what lets a normal
- * and an inverted light sensor share the same broad gradient (inverted =
- * 1 - n) instead of the inverted one saturating everywhere except right at the
- * source. Falls back to a plain clamp(raw,0,1) when no threshold is configured.
- */
-export function normalizeLightLevel(raw, config) {
-  const T = config?.detectionThreshold;
-  if (!T || T <= 0) return Math.min(Math.max(raw ?? 0, 0), 1);
-  const K = config?.fullScaleRatio ?? 16;
-  const F = T * (K > 1 ? K : 1 + 1e-6); // full-scale level
-  const span = F - T;
-  return Math.min(Math.max((raw - T) / span, 0), 1);
-}
+// (normalizeLightLevel — the old level-linear band map — was removed here: it was superseded
+//  by lightLevelNormalized above, which maps linearly in DISTANCE. The level-linear shape only
+//  ever fired near a source and made one polarity look "less sensitive"; nothing in the app or
+//  sim used it anymore.)

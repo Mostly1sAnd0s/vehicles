@@ -13,21 +13,6 @@ export function vehicleToWorld(pose, local) {
   };
 }
 
-/**
- * Resolve every placed component to a world-space transform.
- * Returns [{ id, x, y, angle }] (angle = pose.angle + localRotation).
- */
-export function resolveComponentTransforms(pose, vehicle) {
-  const out = [];
-  for (const c of vehicle.components ?? []) {
-    if (!c.local) continue;
-    const p = vehicleToWorld(pose, c.local);
-    out.push({
-      id: c.id,
-      x: p.x,
-      y: p.y,
-      angle: pose.angle + (c.localRotation ?? 0),
-    });
-  }
-  return out;
-}
+// (resolveComponentTransforms — bulk component->world transform resolution — was removed here:
+//  every production caller (sensors, rendering, sim) resolves just the components it needs via
+//  vehicleToWorld, so the batch helper had no users outside its own tests.)

@@ -9,6 +9,10 @@ The design goal is intuitive construction via snap-able components, explicit sen
 
 The system is client-side only with manual JSON import/export for sharing. No server-side state is required.
 
+> **Superseded in part:** single-player remains client-side exactly as written, but the
+> M0–M6 co-op program (see the Multi-User section below) added an optional authoritative
+> server world + gateway. Everything else in this section still holds.
+
 ## 2. Scope
 
 ### In Scope
@@ -24,7 +28,9 @@ The system is client-side only with manual JSON import/export for sharing. No se
 * Responsive world view that expands to browser window
 
 ### Out of Scope
-* Multi-user collaboration, authentication, or global library
+* ~~Multi-user collaboration, authentication, or global library~~ — multi-user collaboration
+  (a LAN co-op gateway, no auth) was later added as the M0–M6 program; accounts/global
+  library remain out of scope
 * Server-side persistence
 * 3D simulation
 
@@ -49,9 +55,11 @@ No hard-coded variables. All tunable parameters live in JSON config files, each 
 * `config/sensors.json` - Sensor types, falloff models, raycast params, beam visualization options
 * `config/actuators.json` - Actuator types, force limits, power curves
 * `config/world.json` - Default world settings, obstacle primitives, light defaults
+  *(never shipped — worlds are sample JSON documents under `public/worlds/`, not a config)*
 * `config/ui.json` - UI layout, tab defaults, snap point density
 
-Config files are loaded at startup and hot-reloadable in development.
+Config files are loaded at startup *(hot-reload was planned but never implemented; a reload
+of the page re-reads them)*.
 
 ## 4. Data Models
 
@@ -180,7 +188,10 @@ Sharing is via import/export of these JSON files. Manual drag-and-drop file hand
 
 ## 9. Deployment
 
-* Static files served from `dist/`. No server code required.
+* ~~Static files served from `dist/`. No server code required.~~ — the site lives in
+  `public/` (not `dist/`), and `scripts/serve.mjs` is required server code for co-op
+  (one port serves the SPA + `/info` + the gateway). Static-only hosting still works for
+  single-player (copy `public/` to any web root, per the README).
 * Self-host on macOS/Linux with nginx/Caddy.
 * LAN access via local IP. No external dependencies at runtime.
 
@@ -288,6 +299,7 @@ outputs (sensors, logic gates, Neurons):
 ## Status (updated — body color + vehicle-detection-sensor sessions; includes prior sensor/motor tuning)
 
 ### Implemented
+- **Combinational logic gates** (AND/OR/NAND/NOR/XOR/NOT, commit b7acf3e): floating `logicGates[]` nodes in `category: "logic"` in `config/components.json`, placed from `#gate-palette` (free click-placement — deliberately NOT snap-point parts), wired through the normal `vehicle.wires` graph via per-gate In/Out connection slots in the inspector. `src/simulation/logic.js` evaluates them topologically with a cycle guard (`gateOutput` truth tables, `evaluateLogicGates`); a per-sensor `digital` toggle + `threshold` (`toDigital`) coerces analog readings to 0/1 for gate inputs while analog feeders still reach motors unchanged. Unit-tested (`tests/logic.test.js`, `tests/logicWiring.test.js`); placement/arity/wiring covered by `npm run smoke:editor`.
 - **Neuron (§4) + multi-output taps (§4.2):** interactive response editor in the inspector — shape selector (bell / triangle / custom), peak-intensity slider, bell-width (sigma) slider, and a draggable custom-spline editor (add/remove nodes; point-drag writes `props.spline`). Every output component now exposes an **"Add Output"** button that grows per-instance taps (`out`, `out1`, …); input connection slots enumerate each source's taps, so one sensor can drive several parts from its own side. Model: `src/simulation/transfer.js` (pre-existing) + dynamic-output ports in `src/models/wiring.js` (`outputPorts` / `outputPortIds`). Verified by unit tests (`tests/transfer.test.js`, `tests/logicWiring.test.js`) and headless UI smoke `tests/smoke/neurons.outputs.mjs` (`npm run smoke:neurons`).
 - Light sensing normalized linearly in *distance* (`lightLevelNormalized`): a dim source responds from a real range with no near-source cliff; inverse-square physics still sets the sensing window (radius = min(range, sqrt(I/T)), full scale at sqrt(I/F)). Replaces the old level-linear map that made one polarity look "less sensitive" and only fired near a source.
 - Per-sensor FOV + wedge beams: each light sensor has `fov` (default 2 pi / omni) and `aimAngle`; beam drawn as a true triangular wedge whose length = effective sensing radius. Ghost-range fallback removed - no more misleading ring when nothing is in view.
@@ -306,6 +318,11 @@ outputs (sensors, logic gates, Neurons):
 - Motor-response scripting / decision-table layer: thresholds, dead-bands, and conditional branches ("if light > 0.6 then full speed...") to generalize the `value x weight x polarity x powerCurve` model for Vehicles 6/7. Keep `computeActuation` as the single seam so simple and scripted responses share the same clamping + force pipeline.
 
 ## Next Up — Session Handoff (start fresh session, read this + relevant files)
+
+*(Banner is stale-by-design — re-verify with `git status`) state was committed & pushed to
+`main` at the start of the M7 review-fix session (2026-08-27), and items 1–5 below are ALL
+done — the features to build next are in the README "Next" list. What follows is the original
+session handoff, kept as the historical design record for items 1–5.)*
 
 State is committed & pushed to `main`. Features to build next, all in the
 live UI layer (`public/app/` + `config/`) following existing patterns. TDD where pure logic
@@ -359,18 +376,28 @@ is involved; verify each with the headless smoke probes (see below) and `npm tes
     currently `fillStyle '#2b3a52'`, `strokeStyle '#4da3ff'` — with `v.body?.color ?? '#4da3ff'`
     for the stroke (keep a dark fill, or derive it), so the drawn body and its path share color.
 
-### 4. Logic blocks (combinational gates) wired between sensors and motors — NEXT SESSION
+### 4. Logic blocks (combinational gates) wired between sensors and motors — DONE
+
+> **As-built (commit b7acf3e; see the README "Done" list):** gates **AND/OR/NAND/NOR/XOR/NOT**
+> (no XAND — it is not a standard gate and duplicates AND) live in `config/components.json`
+> (category `logic`) and are evaluated topologically with a cycle guard in
+> `src/simulation/logic.js` (`gateOutput` truth tables, `evaluateLogicGates`, `toDigital`).
+> They were deliberately made **floating nodes** (`vehicle.logicGates[]`, free click-placement
+> from `#gate-palette`) rather than snap-point parts — gates are not physical hardware. The
+> per-sensor `digital` toggle + `threshold` coerce analog readings to 0/1 for gate inputs.
+> Unit-tested (`tests/logic.test.js`, `tests/logicWiring.test.js`); UI + arity covered by
+> `npm run smoke:editor`. The original design text below is kept for history.
+
 Goal: insert digital logic into the wiring graph so a motor's drive can depend on the *combination*
 of several sensor readings, not just a weighted sum ("if A AND B then..."). This is the foundation
 for Vehicles 6/7-style conditional behaviour, and it generalises the parked "decision-table" idea.
 
 - New `logic` category in `config/components.json`, one definition per gate: **AND, OR, NAND, NOR,
   XOR, NOT**. (The request also listed "XAND"; that is not a standard gate and appears to duplicate
-  AND — confirm the intended set first, defaulting to AND/OR/NAND/NOR/XOR/NOT.) Each gate has one or
-  more **inputs** (port kind `logic_in`) and one **output** (kind `logic_out`; NOT is exactly 1 in / 1
-  out). Gates are added from the palette and positioned by dragging onto a snap point exactly like
-  wheels/sensors — reuse `placeComponent` + the existing pointer-drag / `nearestSnapIndex` logic in
-  `public/app/editor.js`, so no new placement mechanism is needed.
+  AND — RESOLVED in the implementation: no XAND, the six standard gates shipped.) Each gate has one
+  or more **inputs** (port kind `logic_in`) and one **output** (kind `logic_out`; NOT is exactly 1 in / 1
+  out). *(The plan was to place gates on snap points like wheels/sensors; the implementation
+  instead made them floating nodes — see the As-built note above.)*
 - Generalise wiring. Today a wire is `{from:{componentId,port:'out'}, to:{componentId,port:'drive'}}`
   with one feeder allowed per motor. Extend it so a wire's target can be a **gate input** and a gate
   output can feed a motor `drive` or another gate input. Keep `src/models/wiring.js` the single
@@ -448,7 +475,7 @@ Implementation sketch:
 - For drag + paths you can assert programmatically: set an instance position via a CDP
   evaluate (simulate mousedown/move/up on `world-canvas`, or call the handler), then check
   `inst.body.position` moved and `inst.path.length` grew over a few stepped frames while playing.
-- Leftover-Chrome gotcha: stale headless processes cause "devtools not reachable". Each probe now owns its own port + profile dir (`bv-profile-{editor,world,crud}` on 8901-8903) and pkills only its own before launching; probes also SIGKILL their own chrome/server on exit.
+- Leftover-Chrome gotcha: stale headless processes cause "devtools not reachable". Each probe owns its own web port (8901–8905, 8907, 8915, 8925 — no sharing), CDP port (922x–924x) and profile dir (`/tmp/bv-profile*`), and pkills only its own before launching; probes also SIGKILL their own chrome/server on exit. (This note predates the port unification — the probe list above is the current one.)
 
 ### Current defaults (tuned, do not regress)
 - `config/actuators.json`: `defaultMotorPower: 0.1`, `defaultFriction: 0.5`, `powerCurve: linear`.
@@ -508,12 +535,22 @@ positions/sensor readings at ~10–20 Hz.
   place (pose/velocity preserved). `setCount` adds/removes clones around the last deploy pose.
 - Participant identity: `{ id, name, token, role: 'participant' | 'admin' }` in `session.users`.
 
-### Wire protocol (implemented — JSON over WebSocket; see `src/net/server.js`)
+### Wire protocol (implemented — JSON over WebSocket; see `src/net/gateway.js` + `src/session.js`)
+
+> **Note:** the file named below was `src/net/server.js` in the M0–M4 era and was deleted
+> (commit 00cf59a) when M5 replaced it with the many-world gateway. The first message is the
+> gateway **host/join** handshake (`{type:'host',name}` → new world + code; `{type:'join',
+> name,code}` → participant; roles are explicit — `Session.join` throws without one), not the
+> `{type:'join', name, role?}` / "first joiner becomes admin" shape that follows. The
+> non-handshake commands below (deploy/setCount/controls/element ops) survive unchanged into
+> the M5 protocol.
+
 - **C→S** (first message must be the join handshake)
-  - `{type:'join', name, role?}` → S replies `{type:'welcome', running, you:{name,role,protoId}, world:{elements,bots}}`.
+  - `{type:'join', name, role?}` → S replies `{type:'welcome', running, you:{name,role,protoId,token}, world:{elements,bots}}` *(superseded by the host/join handshake above)*.
   - `{type:'deploy', vehicle}` — owner only (always the sender's own proto); acks `{type:'deployed', protoId, count}`, broadcasts `{type:'peerDeployed', protoId, name}`.
-  - `{type:'setCount', protoId?, count}` — admin only → broadcasts `{type:'countSet', protoId, count}`.
+  - `{type:'setCount', protoId?, count}` — admin only, numeric count required (NaN/missing is refused, never read as 0) → broadcasts `{type:'countSet', protoId, count}`.
   - `{type:'controls', command:'start'|'pause'|'reset'}` — admin only → broadcasts `{type:'state', running}`.
+  - `{type:'addElement'|'moveElement'|'updateElement'|'removeElement'|'setElements'}` — admin only (shared-element edits) → each success broadcasts the full `{type:'elements', elements}` list.
 - **S→C**
   - `{type:'snapshot', t, bots:[{id,protoId,owner,x,y,angle,vx,vy}]}` at ~15 Hz to everyone (bots rounded on the wire).
   - Errors (`{type:'error', error}`) are echoed to the offending actor only.
@@ -635,9 +672,10 @@ worlds**; the CO-OP controls move into the **World tab's left pane** (under ELEM
   socket (server prunes this client's bots). Gateway address + display name persist in localStorage.
   The standalone Co-op tab, `panel-coop`, its top-bar chrome, and `public/app/coop.js` are removed;
   `main.js` is back to two tabs and exposes `__app().coopPanel`. **Client:** `CoopClient.connect(url,
-  name, {mode:'host'|'join', code})` drives the gateway handshake (legacy single-world join still
-  works), keeps `code`/`clients`, and now REJECTS on a pre-welcome server error or close — so a dead
-  join code surfaces in the status line instead of hanging. **Bug fixed:** the gateway left refused
+  name, {mode:'host'|'join', code})` drives the gateway handshake — host/join are the ONLY accepted
+  modes now (`connect` throws otherwise; the legacy single-world join it "still worked" with was
+  removed with the single-world transport) — keeps `code`/`clients`, and now REJECTS on a pre-welcome
+  server error or close — so a dead join code surfaces in the status line instead of hanging. **Bug fixed:** the gateway left refused
   handshakes (unknown code, bad first message) as unbound open sockets whose next frame would crash
   on `state.code`; it now sends the error and hangs up, and the post-handshake path guards `!state`.
   `tests/multiplayer.gateway.test.js` adds refusal-hang-up + a `CoopClient` host/join e2e;
@@ -851,3 +889,121 @@ firewall rule, one thing that can be down.
   opened at the invite URL joins with zero clicks** (host roster → 2) and lands on the World tab with
   an empty address field; Disconnect clears the hash and the roster drops back to 1.
 - `npm run serve:coop` stays as a standalone gateway (a box that hosts worlds and serves no files).
+
+## M7 — codebase-review fix pass (2026-08-27)
+
+A full codebase review (scope: all of `src/`, `public/app/`, `scripts/`, `config/`, probes,
+README/PLAN) produced the punch list below. Everything was fixed + TDD'd (new/updated unit
+tests and smoke assertions), docs corrected, and dead code removed.
+
+### Functional gaps in the shared world (the two real ones)
+- **Element deletion never synced.** The world-inspector **Delete** button mutated the host's
+  local `worldDoc.elements` and stopped — the authoritative server world (and every joiner's
+  render + collisions) kept the deleted element forever. `CoopClient.removeElement` and
+  `Session._removeElement` existed and were tested; nothing in the app ever called them.
+  Fix: `hooks.onElementChange({op:'remove'})` → `c.removeElement(id)`. Same gap for
+  **inspector edits** (X/Y/Rot/Scale/Intensity/Radius/W/H): they were bound locally and never
+  streamed, unlike canvas drags (~30 Hz). Fix: X/Y ride the existing `moveElement`; the rest go
+  out as a new admin-only `updateElement {id, patch{rotation|scale|properties}}` command
+  (`Session._updateElement` + `CoopClient.updateElement` + main.js `op:'update'`), which
+  broadcasts the full element list like its siblings.
+- **Co-op Reset did not undo propagation.** `HeadlessWorld.reset()` re-seated poses only:
+  `vehicleOverride`/`converted`/`convertedAt`/`flashUntil`/`convertedCount`/`stepCount` all
+  survived, so converted clones stayed converted in the SHARED world after a Reset and a
+  `maxConverted` cap stayed permanently half-spent — while the local `WorldSim.reset()`
+  "restores the initial mix". Fix: `reset()` drops every override + bookkeeping, zeroes the
+  counters/clock, and `_syncInstances()` swaps converted bodies back to the prototype doc.
+  Pinned by `tests/multiplayer.sim.test.js` (convert → reset → geometry restored + spread
+  restarts).
+
+### User-data-loss in the editor
+- **Out selector destroyed fan-out wires.** Re-pointing/clearing a source tap's "Out" dropdown
+  deleted EVERY wire from that tap (`wires.filter(w => !(from===tap))`) — but a tap feeding two
+  motors is legitimate and routinely created from the motors' In selectors. Fix: the selector
+  replaces ONLY the wire it displays (the tap's first), and a `+N fan-out` hint makes the extra
+  wires visible instead of the panel silently lying. Covered in `smoke:editor`.
+
+### Correctness / robustness
+- **`matter-js` was a devDependency but is runtime-required by the server** (`serve.mjs` /
+  `serve-coop-gateway.mjs` import it; `Session→HeadlessWorld` needs it) — a production
+  `npm install --omit=dev` yielded a server that crashed on co-op. Moved to `dependencies`.
+- **Path-traversal prefix hole** in `scripts/serve.mjs`: `file.startsWith(ROOT)` also accepted
+  siblings whose absolute path starts with the same string (`…/public-backup/x.json`). Now
+  `file === ROOT || file.startsWith(ROOT + path.sep)`.
+- **`Session._setCount` silently wiped a fleet on a malformed count**: `Number(msg.count) || 0`
+  read missing/NaN as 0 → removed every clone (the exact NaN→0 failure the M2 CLIENT bug had).
+  Now refuses with a message (`setCount requires a numeric count`); an explicit 0 still removes
+  all (✕).
+- **Gateway error-dedup cleanup was broken**: entries were stored under composite
+  `code + ':' + message` keys while the success path called `failed.delete(code)` — which can
+  never match, so a healed world never re-logged a re-occurring error and the set grew
+  unbounded. Now a `Map<code, Set<message>>`; a clean sweep deletes the world's entry.
+- **Co-op identity keyed on display name, not token**: same-name participants (typed or the
+  random `Bot-NN` draw) mis-attributed the "my bots" highlight, popup affordance and fleet
+  "· other" label. Fix: `welcome.you` carries the `token`, wire bots carry `ownerToken`
+  (`Session._tagWire`), and `CoopClient.isMine(b)` keys on the token with the name as legacy
+  fallback. `owner` (the name) still rides for popups/roster labels.
+- **`vehicleSignature` omitted wire polarity, wire ports, and output taps** (and component
+  polarity): configs differing only in those hashed identically → a genuine propagation
+  conversion was skipped as "configs already match". All are in the signature now; the
+  clone-equality invariant (idempotency) is re-proven with taps/polarity/ports in
+  `tests/propagation.test.js`.
+- **`HeadlessWorld.stepOnce()` double-snapshotted** every tick (60 Hz hot path): `world.step()`
+  already builds + caches the snapshot; `stepOnce` called `snapshot()` again for the wire
+  bots. Now reuses it.
+- **`CoopClient.normalizeBot` color fallback was still `#cc3333`** — the exact red the
+  `worldSim.snapshot()` comment says must be `#4da3ff` (worldSim fixed, the client copy
+  survived). Fixed, so a non-conforming sender can't re-introduce the red-bot bug.
+- **Local `WorldSim.reset()` crashed on a bodyless instance** (`M_BodySetPosition` lacked the
+  `if (body)` guard `HeadlessWorld` has). Guarded, matching the headless engine.
+- **`Session._setElements` accepted any array** and handed it to `rebuildObstacles`/the
+  joiner's renderer. Now shape-checked (type + finite position per entry) and refused
+  wholesale with a message; the accepted list is `structuredClone`d so the server owns its copy.
+- **Minor:** `timescale.oninput` wrote `worldDoc.physics.timeScale` unguarded (an imported world
+  without `physics` threw) → `??=`; `ensureCount` instance ids could collide within the same
+  millisecond after add/remove churn → monotonic `_instSeq` suffix; `serve-coop-gateway.mjs`
+  LAN hint used first-IPv4 + `family === 'IPv4'` (the exact VPN-address / old-Node trap the M6
+  commit fixed centrally) → now `pickLanInterfaces()`.
+- **Editor Delete/Backspace had no active-tab guard**: pressing it on the World tab deleted
+  whatever was still selected in the hidden editor. Now gated on `#panel-editor` being active
+  (mirrors the world tab's `isWorldTabActive` gate).
+
+### Dead code removed
+- `src/sensors/light.js` `normalizeLightLevel()` (superseded by `lightLevelNormalized`; zero
+  production callers) + its tests.
+- `src/models/vehicle.js` `resolveComponentTransforms()` (never used; production resolves
+  per-component via `vehicleToWorld`) + its tests.
+- `src/simulation/logic.js` `gateName()` / `isLogicGate()` (no callers outside nothing).
+- `src/sensors/raycast.js` `rayCircle`: unreachable duplicate `if (t2 > EPS) return t2;` branch.
+- `public/app/main.js`: the original `onVehicleChanged` hook (overwritten before ever running)
+  and the unused `const _onVehicleChanged`; the `_vehicleOwnerName` check (never assigned
+  anywhere). `public/app/coopPanel.js`: empty `if (v && !this.onEditDesign) {}` branch in
+  `deploy()`. `public/app/editor.js`: redundant `c.props.range = def.defaults.range` re-assign
+  (the deep clone already set it).
+
+### Docs (README + PLAN corrected to match shipped behavior)
+- README: stale "probes share web port 8903" sentence (each probe owns a port now,
+  8901–8905/8907/8915/8925; `CHROME` env override documented); `public/src` is now genuinely
+  git-ignored (untracked the committed symlink, fixed the `.gitignore` pattern so it matches a
+  symlink — it was tracked as mode-120000 and `build` rewrote it every run); deps line notes
+  both are runtime; "Deploy model, not live-edit / Editing never touches the running bot until
+  deploy" → replaced by the shipped live-sync behavior (~400 ms auto-redeploy after first
+  deploy); `src/actuators.js` added to the layout tree; fleet rows now documented with the
+  typeable exact-count input (commit 743538e).
+- PLAN: Next-Up item 4 (logic gates) marked **DONE** with an as-built note (floating nodes, not
+  snap points; no XAND); original design sections annotated where superseded (§1/§2
+  client-side-only + "no server-side state", §2 out-of-scope multi-user, §3.2
+  `config/world.json` never shipped + hot-reload never implemented, §9 `dist/` → `public/` +
+  `serve.mjs` required); wire-protocol header pointed at `gateway.js`/`session.js` with a
+  superseded callout (the header itself read as current); "legacy single-world join still works"
+  corrected (it doesn't); probe port/profile note updated.
+
+### Verified
+- Unit **262/262** (`npm test`; +11 new: 5 signature, 4 session, 1 client isMine, 1
+  sim reset-propagation; −9 removed with dead code).
+- All 8 browser probes green in one `npm run smoke` run (Chromium, `CHROME` env override),
+  including NEW coverage: `smoke:editor` asserts the Out selector keeps fan-out + shows the
+  hint; `smoke:coop.session` BUG11 (inspector Delete → server + joiner lose the element) and
+  BUG12 (inspector intensity/rot edits → server + joiner mirrored).
+- Traversal fix verified directly: the encoded sibling-prefix escape
+  (`/..%2fpublic-backup%2fx.json`) is now 403 (the old check served it).

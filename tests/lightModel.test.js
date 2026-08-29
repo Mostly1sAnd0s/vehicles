@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lightEffectiveRange, normalizeLightLevel } from '../src/sensors/light.js';
+import { lightEffectiveRange } from '../src/sensors/light.js';
 
 const cfg = { range: 900, detectionThreshold: 0.25, fullScaleRatio: 16, falloffPower: 2 };
 
@@ -40,34 +40,6 @@ test('no sources -> 0', () => {
 test('respects falloffPower (p=1 linear -> range = I/threshold)', () => {
   const r = lightEffectiveRange([{ x: 100, y: 0, intensity: 100 }], { ...cfg, falloffPower: 1 });
   assert.ok(Math.abs(r - 100 / 0.25) < 1e-6); // 400
-});
-
-// ---------- normalizeLightLevel ----------
-
-test('level at or below the detection threshold -> 0', () => {
-  assert.equal(normalizeLightLevel(0.25, cfg), 0);
-  assert.equal(normalizeLightLevel(0, cfg), 0);
-});
-
-test('level at full scale (T * K) -> 1', () => {
-  const full = 0.25 * 16; // 4.0
-  assert.ok(Math.abs(normalizeLightLevel(full, cfg) - 1) < 1e-9);
-});
-
-test('level above full scale clamps to 1', () => {
-  assert.equal(normalizeLightLevel(10, cfg), 1);
-});
-
-test('mid-band level is linear between threshold and full scale', () => {
-  // raw = 2.0 -> (2.0 - 0.25) / (4.0 - 0.25) = 1.75/3.75
-  const n = normalizeLightLevel(2.0, cfg);
-  assert.ok(Math.abs(n - 1.75 / 3.75) < 1e-9);
-});
-
-test('defaults are safe when threshold/ratio missing (falls back to plain clamp)', () => {
-  // no threshold -> treat full scale as 1, so n = clamp(raw,0,1)
-  assert.ok(Math.abs(normalizeLightLevel(0.5, { falloffPower: 2 }) - 0.5) < 1e-9);
-  assert.equal(normalizeLightLevel(3, { falloffPower: 2 }), 1);
 });
 
 // --- FOV gating in effective range ---

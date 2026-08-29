@@ -21,6 +21,20 @@ const configs = {
   components: { components: [{ id: 'light_sensor', category: 'sensor', size: 8 }, { id: 'powered_wheel', category: 'actuator', size: 16 }] },
 };
 
+test('isMine keys on the participant token; names are only the legacy fallback', () => {
+  // Pure unit over the client state machine (the e2e below covers the wire itself).
+  const c = new CoopClient();
+  assert.equal(c.isMine({ owner: 'bob', ownerToken: 't9' }), false, 'unknown identity owns nothing');
+  c.you = { name: 'bob', token: 't9' };
+  assert.equal(c.isMine({ owner: 'bob', ownerToken: 't9' }), true);
+  // same display name, different participant → NOT mine (the collision bug this fixes)
+  assert.equal(c.isMine({ owner: 'bob', ownerToken: 't2' }), false, 'token beats a matching name');
+  assert.equal(c.isMine({ owner: 'alice', ownerToken: 't9' }), true, 'token beats a mismatching name');
+  // legacy sender without ownerToken falls back to the name
+  assert.equal(c.isMine({ owner: 'bob' }), true, 'name fallback keeps old servers working');
+  assert.equal(c.isMine({ owner: 'alice' }), false);
+});
+
 test('M2: client core against the gateway — join, deploy, live stream, admin-only setCount', async () => {
   const gw = createCoopGateway({ Matter, configs });
   const { url } = await gw.start();

@@ -79,7 +79,10 @@ export class Session {
     // Reserve the proto (no vehicle yet -> prototypeVehicle() is null -> no clones) so deploy() can find it.
     this.world.worldDoc.vehiclePrototypes.push({ id: protoId, name: p.name, vehicle: null, _vehicle: null, instances: [] });
     this.stats.joined++;
-    const you = { name: p.name, role: finalRole, protoId };
+    // `you` carries the token on purpose: display names can collide (two people type the same
+    // name; the default Bot-NN draw can collide), and clients must know which bots are MINE by
+    // identity, not by a name string. `owner` on the wire stays the name (it is shown in popups).
+    const you = { name: p.name, role: finalRole, protoId, token };
     return { token, protoId, role: finalRole, you };
   }
 
@@ -100,7 +103,7 @@ export class Session {
       type: 'welcome',
       code: this.code, // set by the gateway (world code); omitted on the wire when undefined
       running: this.running,
-      you: { name: p.name, role: p.role, protoId: p.protoId },
+      you: { name: p.name, role: p.role, protoId: p.protoId, token: p.token },
       world: { elements: this._elementsWire(), bots: this._wireBots() },
     });
   }
@@ -118,6 +121,7 @@ export class Session {
       case 'addElement':    reply = this._addElement(p, msg); break;
       case 'setElements':   reply = this._setElements(p, msg); break;
       case 'moveElement':   reply = this._moveElement(p, msg); break;
+      case 'updateElement': reply = this._updateElement(p, msg); break;
       case 'removeElement': reply = this._removeElement(p, msg); break;
       case 'moveBot':       reply = this._moveBot(p, msg); break;
       default:         reply = { type: 'error', error: `unknown message type: ${msg?.type}` };
@@ -133,7 +137,12 @@ export class Session {
   _setCount(p, msg) {
     if (p.role !== 'admin') return { type: 'error', error: 'setCount requires admin' };
     const protoId = msg.protoId ?? p.protoId; // no id -> resize your own fleet
-    const n = Math.max(0, Math.min(50, Math.trunc(Number(msg?.count)) || 0));
+    // Refuse a missing/NaN count with a message. `Number(...) || 0` (the old shape) mapped a
+    // malformed message to 0 and silently WIPED the fleet — the exact NaN→0 failure the M2
+    // client-side setCount bug had; the server must be as strict as the fixed client.
+    const raw = Number(msg?.count);
+    if (!Number.isFinite(raw)) return { type: 'error', error: 'setCount requires a numeric count' };
+    const n = Math.max(0, Math.min(50, Math.trunc(raw)));
     const owner = this._ownerOf(protoId);
     if (!owner) return { type: 'error', error: `unknown protoId: ${protoId}` };
     // Growing a fleet that has never deployed would mint ghost instances (null vehicle) — refuse
@@ -240,15 +249,46 @@ export class Session {
   }
 
   /**
+   * Non-positional element edit from the host's inspector (rotation, scale, intensity, radius,
+   * width/height…): patch the element and broadcast the full list like the other element
+   * commands. Without this, only canvas DRAGS synced — an inspector edit changed the host's
+   * local world while the authoritative physics and every joiner's render kept the old values.
+   * Position moves keep using moveElement (that is the ~30 Hz drag-streaming path).
+   */
+  _updateElement(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'only the host edits shared elements' };
+    const el = this._sharedElements().find(x => x.id === msg?.id);
+    if (!el) return { type: 'error', error: `no such element: ${msg?.id}` };
+    const patch = msg?.patch && typeof msg.patch === 'object' ? msg.patch : {};
+    if (patch.rotation != null && Number.isFinite(Number(patch.rotation))) el.rotation = Number(patch.rotation);
+    if (patch.scale && Number.isFinite(Number(patch.scale.x)) && Number.isFinite(Number(patch.scale.y))) {
+      el.scale = { x: Number(patch.scale.x), y: Number(patch.scale.y) };
+    }
+    if (patch.properties && typeof patch.properties === 'object') {
+      el.properties = { ...el.properties, ...patch.properties };
+    }
+    this.world.rebuildObstacles();
+    const res = { type: 'elementUpdated', id: el.id };
+    this._sendTo(p.token, res);
+    this.broadcast({ type: 'elements', elements: this._elementsWire() });
+    return res;
+  }
+
+  /**
    * Host seeds the shared world with their whole local element list at host-time. Without this a
    * joiner would only ever see elements added AFTER joining (the pre-loaded world never crossed
    * the wire). Replaces the list wholesale and broadcasts like the other element commands.
+   * The list is shape-checked: rebuildObstacles and the joiner's renderer trust it from here, so
+   * a malformed entry is refused with a message instead of poisoning the shared world.
    */
   _setElements(p, msg) {
     if (p.role !== 'admin') return { type: 'error', error: 'only the host edits shared elements' };
     const els = Array.isArray(msg?.elements) ? msg.elements : null;
     if (!els) return { type: 'error', error: 'setElements requires an elements array' };
-    this.world.worldDoc.elements = els;
+    const bad = els.findIndex(e => !e || typeof e.type !== 'string'
+      || !Number.isFinite(Number(e.position?.x)) || !Number.isFinite(Number(e.position?.y)));
+    if (bad >= 0) return { type: 'error', error: `setElements: element ${bad} needs a type and a finite position` };
+    this.world.worldDoc.elements = structuredClone(els);
     this.world.rebuildObstacles();
     const res = { type: 'elementsSet', count: els.length };
     this._sendTo(p.token, res);
@@ -270,7 +310,16 @@ export class Session {
   }
 
   // ---- stepping / snapshotting ------------------------------------------
-  _wireBots() { return this.world.snapshot().bots.map(roundBot); }
+  /**
+   * Stamp each wire bot with its owner's TOKEN (looked up via the protoId, which is reserved
+   * per-participant at join) and round it for the wire. Names can collide; tokens cannot, so
+   * "which bots are mine" must key off this, not off the display name.
+   */
+  _tagWire(snap) {
+    return snap.bots.map(b => roundBot({ ...b, ownerToken: this._ownerOf(b.protoId)?.token ?? null }));
+  }
+
+  _wireBots() { return this._tagWire(this.world.snapshot()); }
 
   /**
    * Advance one fixed physics step if running. Returns the broadcastable snapshot (rounded bots) or
@@ -278,13 +327,15 @@ export class Session {
    */
   stepOnce() {
     if (!this.running) return null;
+    // world.step() already builds (and caches) its snapshot — reuse it. Calling snapshot()
+    // again here rebuilt every per-bot map (incl. the samples copy) a second time per tick.
     const snap = this.world.step();
-    return { type: 'snapshot', t: snap.t, bots: this._wireBots() };
+    return { type: 'snapshot', t: snap.t, bots: this._tagWire(snap) };
   }
 
   /** Current world state as a wire snapshot (used for periodic broadcast + fresh joiners). */
   currentSnapshotWire() {
     const snap = this.world.snapshot();
-    return { type: 'snapshot', t: snap.t, bots: this._wireBots() };
+    return { type: 'snapshot', t: snap.t, bots: this._tagWire(snap) };
   }
 }

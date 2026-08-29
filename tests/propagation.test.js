@@ -67,6 +67,49 @@ test('vehicleSignature: rewiring (which part feeds which) changes it', () => {
   assert.notEqual(vehicleSignature(a), vehicleSignature(b));
 });
 
+// Wire POLARITY and PORTS and per-instance output taps are genuine configuration — omitting
+// them let a pair that actually differs be skipped as "configs already match".
+test('vehicleSignature: wire from-port (output tap) changes it', () => {
+  const a = baseDoc();
+  const b = JSON.parse(JSON.stringify(a));
+  b.wires[0].from.port = 'out1'; // same source, different tap
+  assert.notEqual(vehicleSignature(a), vehicleSignature(b));
+});
+
+test('vehicleSignature: wire to-port changes it', () => {
+  const a = baseDoc();
+  const b = JSON.parse(JSON.stringify(a));
+  b.wires[1].to.port = 'drive2';
+  assert.notEqual(vehicleSignature(a), vehicleSignature(b));
+});
+
+test('vehicleSignature: wire polarity (excitatory/inhibitory) changes it', () => {
+  const a = baseDoc();
+  const b = JSON.parse(JSON.stringify(a));
+  b.wires[1].polarity = 'inhibitory';
+  assert.notEqual(vehicleSignature(a), vehicleSignature(b));
+});
+
+test('vehicleSignature: per-instance output taps and component polarity change it', () => {
+  const a = baseDoc();
+  const b = JSON.parse(JSON.stringify(a));
+  b.components[0].outputs = ['out', 'out1']; // an "Add Output" tap grown on the sensor
+  assert.notEqual(vehicleSignature(a), vehicleSignature(b));
+  const c = JSON.parse(JSON.stringify(a));
+  c.components[0].polarity = 'inverted';
+  assert.notEqual(vehicleSignature(a), vehicleSignature(c));
+});
+
+test('vehicleSignature: a clone with taps/polarity/ports still matches its host (idempotency holds)', () => {
+  const a = baseDoc();
+  a.components[0].outputs = ['out', 'out1'];
+  a.components[0].polarity = 'inverted';
+  a.wires[0].from.port = 'out1';
+  a.wires[0].polarity = 'inhibitory';
+  const c = cloneVehicleForConversion(a, 'n7');
+  assert.equal(vehicleSignature(a), vehicleSignature(c));
+});
+
 // ---------------- selectPropagationTargets ----------------
 
 test('selectPropagationTargets: excludes self, out-of-range, and same-config', () => {

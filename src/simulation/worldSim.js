@@ -165,15 +165,34 @@ export class HeadlessWorld {
     return true;
   }
 
-  /** Return every clone to its seed pose with zero velocity. */
+  /**
+   * Return every clone to its seed pose with zero velocity AND undo configuration propagation:
+   * drop every `vehicleOverride` (converted clone) plus the conversion bookkeeping, so Reset
+   * restores the initial mix — exactly what the local single-player `WorldSim.reset()` does.
+   * Without the override/converter sweep, converted clones stayed converted in the SHARED world
+   * across a Reset and a `maxConverted` cap stayed permanently half-spent (the two engines
+   * diverged despite running "the identical loop").
+   */
   reset() {
+    let hadPropagation = false;
     for (const inst of this.instances) {
+      if (inst.vehicleOverride || inst.converted) hadPropagation = true;
+      inst.vehicleOverride = null;
+      inst.converted = false;
+      inst.convertedAt = null;
+      inst.flashUntil = 0;
+      inst.lastSamples = [];
+      inst.lastMotors = [];
       if (!inst.body) continue;
       M_BodySetPosition(this.M, inst.body, { x: inst.seed.x, y: inst.seed.y });
       M_BodySetAngle(this.M, inst.body, inst.seed.rotation ?? 0);
       this.M.Body.setVelocity(inst.body, { x: 0, y: 0 });
       this.M.Body.setAngularVelocity(inst.body, 0);
     }
+    this.convertedCount = 0;
+    this.stepCount = 0;
+    // Converted bodies were built from the cloned doc — swap them back to the prototype's.
+    if (hadPropagation) this._syncInstances();
   }
 
   // ---------------- per-step (ported from world.js) ----------------

@@ -203,8 +203,7 @@ export class CoopPanel {
   deploy() {
     const c = this.client;
     if (c.status !== 'connected') { this.ui.status.textContent = 'not in a shared world'; return; }
-    const v = this.getVehicle?.();
-    if (v && !this.onEditDesign) { /* first-class design slot not wired — fall through to editor vehicle */ }
+    const v = this.getVehicle?.(); // the co-op design if one exists, else the editor's live vehicle
     if (!v) { this.ui.status.textContent = 'no design to deploy — build a vehicle in the editor first'; return; }
     c.deploy(v);
     this.ui.status.textContent = `deploying your design… (driving as ${c.you?.name})`;

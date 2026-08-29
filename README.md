@@ -10,7 +10,9 @@ hosts many 6-char coded worlds that participants join from their own browser, wi
 the server running the single authoritative simulation. See `PLAN.md` for the full
 design and current status.
 
-Requires Node 22+ (developed on Node 26). Only two deps: `matter-js`, `ws`.
+Requires Node 22+ (developed on Node 26). Only two deps: `matter-js`, `ws` — both
+in `dependencies`, not dev: the co-op gateway imports `matter-js` at runtime, so a
+production `npm install --omit=dev` must still yield a working server.
 
 ## Run
 
@@ -51,12 +53,14 @@ beside it. `GET /info` reports the advertised host, port and world count; `GET
 /health` reports `{worlds:<n>}` on the standalone gateway.
 
 No build step is required at runtime — vanilla ES modules + vendored Matter.js.
-(`public/src` is a symlink created by `build`, so it is git-ignored.)
+(`public/src` is a symlink to `../src` created by `build`; it is git-ignored — do
+not commit it, and a checkout needs `npm run build` before the page resolves
+`./src/…` imports.)
 
 ## Test (TDD)
 
 ```bash
-npm test                 # 260 unit tests (node --test, no framework)
+npm test                 # 262 unit tests (node --test, no framework)
 npm run smoke            # all eight headless-Chrome probes below, in sequence
 npm run smoke:editor     # place + drag-snap + wire, gates + slots, body color via UI
 npm run smoke:world      # sim runs; sensor/motor polarity, detection, propagation
@@ -76,14 +80,15 @@ rather than an in-process gateway, so it is the one that would catch a broken
 startup path.
 
 Smoke tests are self-contained (each starts its own static server and drives
-headless Chrome over raw CDP — no Puppeteer) and need the Google Chrome at the
-`CHROME` constant in each script (macOS path; adjust if needed). Each probe owns
-its own web port, CDP debug port, Chrome profile dir (plus a gateway port for the
-co-op ones — `coop.panel` 8961, `coop.session` 8963, `world.tabs` 8975) and
-cleans up after itself. Stale headless Chrome is the usual cause of "devtools not
-reachable"; each probe `pkill`s only its own profile. The probes that share a web
-port (`proto.crud` and `neurons.outputs` both use 8903) are only safe because
-`npm run smoke` runs them in sequence.
+headless Chrome over raw CDP — no Puppeteer) and need a Chrome/Chromium at the
+`CHROME` constant in each script — the macOS Google Chrome path by default, or
+point `CHROME=/usr/bin/chromium-browser` (or any build) at a different one. Each
+probe owns its own web port (8901–8905, 8907, 8915, 8925 — no two probes share
+one), CDP debug port, and Chrome profile dir (plus a gateway port for the co-op
+ones — `coop.panel` 8961, `coop.session` 8963, `world.tabs` 8975) and cleans up
+after itself, so the sequence inside `npm run smoke` can never race on a port.
+Stale headless Chrome is the usual cause of "devtools not reachable"; each probe
+`pkill`s only its own profile.
 
 ## Layout
 
@@ -96,6 +101,9 @@ config/                 JSON config (source of truth)
   ui.json                 keyboard shortcuts
 
 src/                    testable core (pure ESM, no DOM) — linked in as public/src
+  actuators.js            the actuator model — computeActuation (value × weight ×
+                          polarity × powerCurve, clamped), applyMotorPower,
+                          wheelFrictionAir, actuatorPolaritySign (the "single seam")
   models/snapPoints.js    perimeter snap-point generation (corners + body centre)
   models/vehicle.js       pose math, component transform resolution
   models/wiring.js        wiring validation (duplicates, port-type mismatch, weight,
@@ -200,9 +208,12 @@ Done (co-op, milestone **M5**):
 - **Server-authoritative sim**: Play/Pause/Reset forward to the session while
   connected and the buttons follow the authoritative `state {running}`; deployed
   bots sense lights, fire motors and collide with walls in the *shared* world.
-- **Deploy model, not live-edit**: "Edit my design" opens the editor on your own
+- **Deploy model, then live-sync**: "Edit my design" opens the editor on your own
   co-op doc, "Deploy design" pushes it and rebuilds your clones in place, keeping
-  each clone's pose/momentum. Editing never touches the running bot until deploy.
+  each clone's pose/momentum. Before the first deploy, editing touches nothing;
+  after it, live edits auto-redeploy (throttled ~400 ms, content-signature
+  guarded), so picking a body color in the editor updates your running shared bot
+  within ~400 ms — no second "Deploy design" click.
 - **Ownership**: every bot has exactly one owner; deploy is owner-only by
   construction (no protoId on the wire). Participants select but cannot drag
   elements (read-only inspector), cannot run the session, and their local bots
@@ -211,7 +222,8 @@ Done (co-op, milestone **M5**):
   and thereafter mirrored; element drags stream live (~30 Hz) rather than
   teleporting on mouseup; joiners mirror immediately on welcome.
 - **Host fleet management**: `#remote-fleet` lists every participant's prototype
-  with a live bot count; the host gets −/+/✕ per row (`setCount`), never edit.
+  with a live bot count; the host gets −/+/✕ plus a typeable exact-count input
+  per row (`setCount`, clamped 0–50), never edit.
 - **Host leaves → everyone goes home**: `worldClosed` broadcast, sockets
   terminated, world reclaimed, joiners get their pre-join "home" world restored.
 - Shared-bot rendering with each participant's hue, per-bot beams/values,

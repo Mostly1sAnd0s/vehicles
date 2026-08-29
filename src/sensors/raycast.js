@@ -34,9 +34,7 @@ function rayCircle(ox, oy, dx, dy, c) {
   const t2 = (-b + sq) / (2 * a);
   const EPS = 1e-9;
   if (t1 > EPS) return t1;
-  if (t2 > EPS) return t2;
-  // origin inside: use far exit point (still a "hit" for occlusion distance)
-  if (t2 > EPS) return t2;
+  if (t2 > EPS) return t2; // also the origin-inside case: the far exit point is still a "hit"
   return Infinity;
 }
 

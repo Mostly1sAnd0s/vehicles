@@ -14,7 +14,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import Matter from 'matter-js';
 import { createCoopGateway } from '../../src/net/gateway.js';
 
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PORT = 9232;
 const WEB = 8907;
 const GW_PORT = 8963;
@@ -203,6 +203,38 @@ try {
   const elsJ2 = await elsSig(J);
   const elsH2 = await elsSig(H);
   if (elsJ2 !== elsH2) fail('BUG3: live element edit not mirrored to joiner (joiner ' + elsJ2 + ' vs host ' + elsH2 + ')');
+
+  // ---------- BUG 11 (this fix): inspector DELETE syncs to the server + joiner ----------
+  // Delete used to mutate only the host's local list: the AUTHORITATIVE physics world (and every
+  // joiner's render + collisions) kept the deleted element forever. CoopClient.removeElement and
+  // Session._removeElement existed and were tested — nothing in the app ever called them.
+  const delId = await H.ev(`(()=>{const app=window.__app();const els=app.state.world.elements;const el=els[els.length-1];app.worldSim.selectedElement=el.id;app.worldSim.renderInspector();return el.id})()`);
+  if (!(await H.ev(`!!document.querySelector('#world-inspector #wi-del')`))) fail('BUG11: element popup did not open with a Delete button');
+  await H.ev(`document.getElementById('wi-del').click()`);
+  let gone11 = false;
+  for (let i = 0; i < 60 && !gone11; i++) {
+    gone11 = !(await J.ev(`window.__app().state.world.elements.some(e=>e.id==='${delId}')`));
+    if (!gone11) await sleep(100);
+  }
+  if (!gone11) fail('BUG11: host inspector Delete never mirrored to the joiner (joiner still renders it)');
+  if (gw.worlds.get(code).session.world.worldDoc.elements.some(e => e.id === delId)) fail('BUG11: server (authoritative physics) still has the deleted element');
+  if (await H.ev(`window.__app().state.world.elements.some(e=>e.id==='${delId}')`)) fail('BUG11: host still has its own deleted element?!');
+
+  // ---------- BUG 12 (this fix): inspector EDITS sync (intensity/rot/…), not just drags ---
+  // X/Y/Rot/Scale/Intensity/Radius/W/H were bound locally and never streamed, so the shared
+  // world's physics and every joiner kept the OLD values while only canvas drags synced.
+  const editLightId = await H.ev(`window.__app().state.world.elements.find(e=>e.type==='light').id`);
+  await H.ev(`(()=>{const app=window.__app();app.worldSim.selectedElement='${editLightId}';app.worldSim.renderInspector();const i=document.getElementById('wi-int');if(!i)throw new Error('no wi-int on the light popup');i.value='9876';i.dispatchEvent(new Event('change',{bubbles:true}));const r=document.getElementById('wi-rot');r.value='45';r.dispatchEvent(new Event('change',{bubbles:true}));return 1})()`);
+  let synced12 = false, seen12 = null;
+  for (let i = 0; i < 60 && !synced12; i++) {
+    seen12 = await J.ev(`(()=>{const e=window.__app().state.world.elements.find(e=>e.id==='${editLightId}');return JSON.stringify(e?{int:e.properties.intensity,rot:e.rotation}:null)})()`);
+    const v = JSON.parse(seen12);
+    synced12 = v && v.int === 9876 && Math.abs(v.rot - Math.PI / 4) < 1e-6;
+    if (!synced12) await sleep(100);
+  }
+  if (!synced12) fail('BUG12: inspector intensity/rot edits did not mirror to the joiner: ' + seen12);
+  const srv12 = gw.worlds.get(code).session.world.worldDoc.elements.find(e => e.id === editLightId);
+  if (!(srv12 && srv12.properties.intensity === 9876)) fail('BUG12: server world kept the old intensity (the authoritative sim senses what the server holds): ' + JSON.stringify(srv12?.properties));
 
   // ---------- BUG 10a: the JOINER's world is locked — its drag must move nothing --------
   // Elements are host-controlled: a participant may select one for the read-only popup but

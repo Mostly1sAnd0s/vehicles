@@ -19,10 +19,8 @@
     "smoke:merged": "node tests/smoke/merged.serve.mjs"
   },
   "license": "MIT",
-  "devDependencies": {
-    "matter-js": "^0.20.0"
-  },
   "dependencies": {
+    "matter-js": "^0.20.0",
     "ws": "^8.21.3"
   }
 }

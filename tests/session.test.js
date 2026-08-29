@@ -213,6 +213,84 @@ test('M5: moveBot is admin-only and repositions a deployed bot authoritatively (
   assert.equal(s.handle(a.token, { type: 'moveBot', id: 'ghost', x: 0, y: 0 }).type, 'error', 'unknown bot id must be an error');
 });
 
+test('updateElement patches non-positional inspector edits (host-only) and mirrors them', () => {
+  // The gap this closes: inspector edits (Rot/Scale/Intensity/Radius/W/H) were bound locally and
+  // never streamed, so the authoritative physics + every joiner kept the OLD element while only
+  // canvas DRAGS synced.
+  const s = makeSession();
+  const a = s.join({ name: 'alice', role: 'admin' });
+  const b = s.join({ name: 'bob', role: 'participant' });
+  capture(s, a.token);
+  const gotB = capture(s, b.token);
+  const added = s.handle(a.token, { type: 'addElement', element: { type: 'obstacle', primitive: 'circle', position: { x: 10, y: 10 }, properties: { radius: 30 } } });
+  assert.equal(added.type, 'elementAdded');
+
+  assert.equal(s.handle(b.token, { type: 'updateElement', id: added.id, patch: { rotation: 1 } }).type, 'error', 'participants refused');
+
+  const res = s.handle(a.token, { type: 'updateElement', id: added.id, patch: { rotation: 0.5, scale: { x: 2, y: 2 }, properties: { radius: 55 } } });
+  assert.equal(res.type, 'elementUpdated');
+  const el = s.world.worldDoc.elements[0];
+  assert.equal(el.rotation, 0.5);
+  assert.deepEqual(el.scale, { x: 2, y: 2 });
+  assert.equal(el.properties.radius, 55, 'properties patch merges, it does not replace the object');
+
+  const mirror = gotB.filter(m => m.type === 'elements').at(-1).elements[0];
+  assert.equal(mirror.properties.radius, 55, 'joiners mirror inspector edits, not just drags');
+  assert.equal(mirror.rotation, 0.5);
+  assert.equal(s.handle(a.token, { type: 'updateElement', id: 'ghost', patch: {} }).type, 'error', 'unknown id is a clean error');
+});
+
+test('setCount refuses a missing/NaN count instead of silently wiping the fleet', () => {
+  // `Number(msg.count) || 0` mapped a malformed message to 0 and REMOVED EVERY CLONE — the same
+  // NaN→0 failure mode as the documented M2 client bug. Refuse with a message, like everywhere else.
+  const s = makeSession();
+  const a = s.join({ name: 'alice', role: 'admin' });
+  capture(s, a.token);
+  s.handle(a.token, { type: 'deploy', vehicle: seekerDoc() });
+  s.handle(a.token, { type: 'setCount', protoId: a.protoId, count: 3 });
+  assert.equal(s.world.instancesFor(a.protoId).length, 3);
+  assert.equal(s.handle(a.token, { type: 'setCount', protoId: a.protoId }).type, 'error', 'missing count is refused, not read as 0');
+  assert.equal(s.handle(a.token, { type: 'setCount', protoId: a.protoId, count: 'ten' }).type, 'error');
+  assert.equal(s.world.instancesFor(a.protoId).length, 3, 'the fleet survived the malformed messages');
+  // an explicit 0 still works (that is ✕ — remove all)
+  assert.equal(s.handle(a.token, { type: 'setCount', protoId: a.protoId, count: 0 }).type, 'countSet');
+  assert.equal(s.world.instancesFor(a.protoId).length, 0);
+});
+
+test('identity: welcome carries the token and wire bots carry ownerToken (names can collide)', () => {
+  // Ownership used to be keyed on the DISPLAY NAME on the wire — two participants who pick the
+  // same name (typed, or the random Bot-NN default) mis-attributed "my bots" everywhere.
+  const s = makeSession();
+  const a = s.join({ name: 'bob', role: 'admin' });
+  const b = s.join({ name: 'bob', role: 'participant' }); // same display name on purpose
+  assert.notEqual(a.token, b.token);
+  const gotB = capture(s, b.token);
+  s.sendWelcome(b.token);
+  const w = gotB.find(m => m.type === 'welcome');
+  assert.equal(w.you.token, b.token, 'the welcome tells the client its own token');
+
+  s.handle(a.token, { type: 'deploy', vehicle: seekerDoc() });
+  s.handle(b.token, { type: 'deploy', vehicle: seekerDoc() });
+  const bots = s.currentSnapshotWire().bots;
+  assert.equal(bots.length, 2);
+  const tokenOf = Object.fromEntries(bots.map(x => [x.protoId, x.ownerToken]));
+  assert.equal(tokenOf[a.protoId], a.token);
+  assert.equal(tokenOf[b.protoId], b.token, 'same-name owners are told apart by token');
+  assert.ok(bots.every(x => x.owner === 'bob'), 'the display name still rides along for popups/labels');
+});
+
+test('setElements rejects a malformed entry wholesale instead of poisoning the shared world', () => {
+  const s = makeSession();
+  const a = s.join({ name: 'alice', role: 'admin' });
+  capture(s, a.token);
+  const res = s.handle(a.token, { type: 'setElements', elements: [
+    { id: 'l1', type: 'light', position: { x: 0, y: 0 } },
+    { id: 'r1', type: 'rock' }, // no position — rebuildObstacles/renderers would trust it anyway
+  ] });
+  assert.equal(res.type, 'error');
+  assert.equal(s.world.worldDoc.elements.length, 0, 'the bad list was refused whole, not half-applied');
+});
+
 test('M5: moveBot with a rotation lands the bot at X/Y AND heading (inspector Rot field)', () => {
   const s = makeSession();
   const a = s.join({ name: 'alice', role: 'admin' });

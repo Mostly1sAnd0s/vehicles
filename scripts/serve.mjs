@@ -91,7 +91,9 @@ const server = http.createServer(async (req, res) => {
     let urlPath = decodeURIComponent(url.pathname);
     if (urlPath === '/') urlPath = '/index.html';
     const file = path.normalize(path.join(ROOT, urlPath));
-    if (!file.startsWith(ROOT)) { res.writeHead(403); res.end('forbidden'); return; }
+    // ROOT + sep, not bare ROOT: a plain prefix check also accepts SIBLINGS whose absolute path
+    // starts with the same string (…/public-backup/x.json passes startsWith('…/public')).
+    if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); res.end('forbidden'); return; }
     const body = await readFile(file);
     // dev server: never serve stale ES modules from heuristic cache
     noStore(res, MIME[path.extname(file)] ?? 'application/octet-stream');

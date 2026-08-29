@@ -574,7 +574,8 @@ export class WorldSim {
       this.reset();
     };
     this.ui.timescale.oninput = e => {
-      this.worldDoc.physics.timeScale = Number(e.target.value);
+      // `??=`: an imported world JSON without a physics block used to throw right here.
+      (this.worldDoc.physics ??= {}).timeScale = Number(e.target.value);
       this.ui.timescaleVal.textContent = Number(e.target.value).toFixed(1) + '×';
     };
     this.ui.btnBeams.onclick = () => {
@@ -632,10 +633,14 @@ export class WorldSim {
   reset() {
     let hadPropagation = false;
     for (const inst of this.instances) {
-      M_BodySetPosition(this.M, inst.body, { x: inst.seed.x, y: inst.seed.y });
-      M_BodySetAngle(this.M, inst.body, inst.seed.rotation);
-      inst.body.velocity = { x: 0, y: 0 };
-      inst.body.angularVelocity = 0;
+      // Bodyless instances (a body that failed to build) must not turn Reset into a throw —
+      // HeadlessWorld's equivalent already skips them; this is the parity fix.
+      if (inst.body) {
+        M_BodySetPosition(this.M, inst.body, { x: inst.seed.x, y: inst.seed.y });
+        M_BodySetAngle(this.M, inst.body, inst.seed.rotation);
+        inst.body.velocity = { x: 0, y: 0 };
+        inst.body.angularVelocity = 0;
+      }
       inst.path = []; // fresh trail after a reset
       // Restore the initial mix: drop any propagated clone + bookkeeping.
       if (inst.vehicleOverride || inst.converted) hadPropagation = true;
@@ -736,8 +741,12 @@ export class WorldSim {
   ensureCount(proto, n, at) {
     const insts = proto.instances;
     while (insts.length < n) {
+      // Counter suffix, not just insts.length: after add/remove churn two pushes can land in the
+      // same millisecond with the same length and mint a DUPLICATE id (ids key selection, popups
+      // and the wire).
+      this._instSeq = (this._instSeq || 0) + 1;
       insts.push({
-        id: `inst_${Date.now().toString(36)}_${insts.length}`,
+        id: `inst_${Date.now().toString(36)}_${this._instSeq}_${insts.length}`,
         // No explicit drop point: spread across the visible area (not a tight ±50
         // cluster at the origin, which read as "a pile at center").
         position: at ?? { x: this.view.x + (Math.random() - 0.5) * this.viewRadius(),
@@ -1008,7 +1017,7 @@ export class WorldSim {
   }
 }
 
-function M_BodySetPosition(M, body, p) { M.Body.setPosition(body, p); }
-function M_BodySetAngle(M, body, a) { M.Body.setAngle(body, a); }
+function M_BodySetPosition(M, body, p) { if (body) M.Body.setPosition(body, p); }
+function M_BodySetAngle(M, body, a) { if (body) M.Body.setAngle(body, a); }
 function M_CompositeRemove(M, world, body) { if (body) M.Composite.remove(world, body); }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }

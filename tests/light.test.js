@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sampleLight, normalizeLightLevel, lightLevelNormalized } from '../src/sensors/light.js';
+import { sampleLight, lightLevelNormalized } from '../src/sensors/light.js';
 
 const cfg = { range: 300, minDistance: 5, falloffPower: 2 };
 
@@ -94,30 +94,8 @@ test('saturation caps the output when configured', () => {
   assert.equal(strong, 1.0);
 });
 
-// The normalization band is what makes a NORMAL sensor usable at car-scale
-// distances (not just on top of a source): n=0 below the detection threshold,
-// n=1 at full scale = threshold * fullScaleRatio, clamped to [0,1]. With the
-// current config (T=0.1, K=32 -> F=3.2) a bright source keeps n>0 over a real
-// approach distance instead of a cramped band near the source.
-test('normalizeLightLevel: 0 below threshold, 1 at full scale, clamped', () => {
-  const c = { detectionThreshold: 0.1, fullScaleRatio: 32 };
-  assert.equal(normalizeLightLevel(0, c), 0);
-  assert.equal(normalizeLightLevel(0.1, c), 0); // at threshold -> 0
-  assert.ok(Math.abs(normalizeLightLevel(0.1 + (3.2 - 0.1) / 2, c) - 0.5) < 1e-9); // mid-band
-  assert.equal(normalizeLightLevel(3.2, c), 1); // at full scale -> 1
-  assert.equal(normalizeLightLevel(100, c), 1); // clamped above
-  assert.equal(normalizeLightLevel(-5, c), 0); // clamped below
-});
-
-test('normal sensor registers over a real approach distance to a bright source', () => {
-  const s = { falloffPower: 2, minDistance: 5, defaultRange: 600 };
-  const n01 = { detectionThreshold: 0.1, fullScaleRatio: 32 };
-  // I=6000 source (the default world sun); sensor origin at 0, aim +x.
-  const at = d => normalizeLightLevel(sampleLight({ x: 0, y: 0 }, [{ x: d, y: 0, intensity: 6000 }], s), n01);
-  assert.ok(at(60) > 0.5); // close: strong
-  assert.ok(at(150) > 0 && at(150) < 1); // mid approach: clearly live (was ~0 before the band fix)
-  assert.ok(at(400) === 0); // out of range: dark
-});
+// (The old normalizeLightLevel band tests were removed with the function: the live pipeline
+//  uses lightLevelNormalized — linear in DISTANCE — covered exhaustively below.)
 
 // ---------------------------------------------------------------------------
 // lightLevelNormalized: linear-in-DISTANCE mapping (the fix for "only moves

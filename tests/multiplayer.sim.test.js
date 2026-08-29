@@ -256,3 +256,44 @@ test('M5: moveBot applies an explicit rotation (inspector Rot field) and seeds i
   sim.moveBot('bot#1', 50, 30);
   assert.ok(Math.abs(inst.body.angle - Math.PI / 2) < 1e-9, 'omitting rot must not change the angle');
 });
+
+test('M5: reset() UNDOES configuration propagation, not just poses (parity with the local WorldSim)', () => {
+  // The gap this closes: HeadlessWorld.reset() used to re-seat poses only, so in the SHARED
+  // world converted clones stayed converted across a Reset and a maxConverted cap stayed
+  // permanently half-spent — while the single-player reset "restores the initial mix". Same
+  // loop claimed, different behavior; this pins the shared engine to the documented contract.
+  const seedDoc = () => ({
+    body: { shape: 'rect', width: 80, height: 40, color: '#00ff00' },
+    components: [
+      { id: 'p1', type: 'propagate', local: { x: 0, y: 0 }, localRotation: 0, props: { threshold: 300 } },
+      { id: 'wR', type: 'powered_wheel', local: { x: 0, y: 12 }, localRotation: 0, props: {} },
+    ],
+    wires: [],
+  });
+  const plainDoc = () => ({
+    body: { shape: 'rect', width: 80, height: 40, color: '#3333ff' },
+    components: [{ id: 'wR', type: 'powered_wheel', local: { x: 0, y: 12 }, localRotation: 0, props: {} }],
+    wires: [],
+  });
+  const { sim } = makeWorld({ protos: { seed: seedDoc(), plain: plainDoc() } });
+  sim.addInstance({ id: 'seed#1', protoId: 'seed', seed: { x: 0, y: 0, rotation: 0 } });
+  sim.addInstance({ id: 'plain#1', protoId: 'plain', seed: { x: 60, y: 0, rotation: 0 } });
+
+  for (let i = 0; i < 3; i++) sim.step();
+  const target = sim.instances.find(i => i.id === 'plain#1');
+  assert.ok(target.vehicleOverride && target.converted, 'the plain bot should have been converted');
+  assert.equal(sim.convertedCount, 1);
+
+  sim.reset();
+  assert.equal(target.vehicleOverride, null, 'reset must drop the cloned config (restore the initial mix)');
+  assert.equal(target.converted, false);
+  assert.equal(target.convertedAt, null);
+  assert.equal(sim.convertedCount, 0, 'the conversion counter resets too (maxConverted parity)');
+  assert.equal(sim.stepCount, 0, 'the propagation clock resets too (cooldown parity)');
+  const b = sim.snapshot().bots.find(x => x.id === 'plain#1');
+  assert.equal(b.color, '#3333ff', 'the snapshot geometry returns to the prototype doc');
+
+  // And the world is genuinely back to the initial mix: the seed can spread again.
+  for (let i = 0; i < 3; i++) sim.step();
+  assert.ok(target.vehicleOverride, 'propagation restarts from the restored mix');
+});

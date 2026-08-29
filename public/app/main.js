@@ -134,12 +134,13 @@ async function main() {
     wiringErrors: $('wiring-errors'),
     inspector: $('inspector'),
   }, state, {
-    onVehicleChanged: v => {
-      // propagate edits to all instances (plan §6.2)
-      for (const p of state.world.vehiclePrototypes) {
-        if (p.name === 'Vehicle A' || !p._vehicleOwnerName) p._vehicle = clone(v);
-      }
-    },
+    // The world tab guards its own shortcuts; the editor needs the same gate so Delete/Backspace
+    // on the World view cannot delete a component still selected in the (hidden) editor.
+    isEditorTabActive: () => $('panel-editor').classList.contains('active'),
+    // NOTE: onVehicleChanged is installed below (single wrapper handling prototype propagation
+    // AND co-op live-sync). The pre-wrapper version here — which propagated edits to "Vehicle A
+    // or !p._vehicleOwnerName" — was overwritten before ever running, and _vehicleOwnerName was
+    // never assigned anywhere.
   });
 
   function initWorldSim() {
@@ -174,13 +175,16 @@ async function main() {
         if (c.status !== 'connected' || c.you?.role !== 'admin') return; // single-player or read-only
         if (info.op === 'add') c.addElement(info.element);
         else if (info.op === 'move') c.moveElement(info.id, info.x, info.y);
+        else if (info.op === 'remove') c.removeElement(info.id); // inspector Delete — without this
+        else if (info.op === 'update') c.updateElement(info.id, info.patch); // rot/scale/intensity/…
       },
       // Co-op (M5 p3): shared-world bots render on top of the local world (both roles).
       remoteBots: () => {
         const c = coopPanel.client;
         if (c.status !== 'connected') return [];
-        const me = c.you?.name;
-        return c.bots.map((b) => ({ ...b, mine: b.owner === me }));
+        // isMine keys on the participant TOKEN (names can collide — two people, or the random
+        // Bot-NN default, can share one; name-equality mis-attributed the highlight/popups).
+        return c.bots.map((b) => ({ ...b, mine: c.isMine(b) }));
       },
       // Co-op: Play/Pause/Reset run the SHARED world (server-authoritative); the button label
       // comes back via the authoritative `state` message (worldSim.setRunning).
@@ -303,9 +307,8 @@ async function main() {
     }
   });
 
-  // simplify propagation: only track owner prototype after Edit
-  const _onVehicleChanged = editor.hooks.onVehicleChanged;
-  // Co-op: once a participant has deployed, LIVE edits re-deploy automatically (throttled). The
+  // Single editor-change seam: propagate to the OWNER prototype and (co-op) live-sync the
+  // deployed design. Co-op: once a participant has deployed, LIVE edits re-deploy automatically (throttled). The
   // server rebuilds each clone's body in place (pose + momentum preserved), so picking a body
   // color in the editor updates your running shared bot within ~400ms — no second "Deploy
   // design" click. A content signature skips no-op resends (refresh() churn is common).
@@ -313,7 +316,7 @@ async function main() {
   let _coopSyncTimer = null;
   const coopHasDeployedBots = () => {
     const c = coopPanel.client;
-    return c.status === 'connected' && !!c.you?.name && (c.bots ?? []).some(b => b.owner === c.you.name);
+    return c.status === 'connected' && (c.bots ?? []).some(b => c.isMine(b));
   };
   editor.hooks.onVehicleChanged = v => {
     const w = state.world.vehiclePrototypes.find(p => p === (state.vehicleOwner ?? null));

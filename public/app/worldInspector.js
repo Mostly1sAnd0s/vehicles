@@ -81,20 +81,29 @@ export function renderWorldInspector(sim) {
           : `<label>Width <input type="number" id="wi-w" value="${el.properties.width ?? 20}" ${ro}></label>
              <label>Height <input type="number" id="wi-h" value="${el.properties.height ?? 20}" ${ro}></label>`}
       ${canEdit ? '<button id="wi-del">Delete element</button>' : ''}`;
+    // Every mutation also fires hooks.onElementChange so a connected host's edit reaches the
+    // authoritative shared world + every joiner (position rides the existing moveElement stream;
+    // the rest go out as an 'update' patch). Single-player: the hook is a no-op unless connected.
+    const syncMove = () => sim.hooks?.onElementChange?.({ op: 'move', id: el.id, x: Math.round(el.position.x), y: Math.round(el.position.y) });
+    const syncPatch = patch => sim.hooks?.onElementChange?.({ op: 'update', id: el.id, patch });
     const bind = (id, fn) => { if (!canEdit) return; box.querySelector('#' + id)?.addEventListener('change', e => { fn(Number(e.target.value)); sim.buildObstacles(); sim.renderInspector(); }); };
-    bind('wi-x', v => el.position.x = v);
-    bind('wi-y', v => el.position.y = v);
-    bind('wi-rot', v => el.rotation = v * Math.PI / 180);
-    bind('wi-scale', v => { el.scale.x = v; el.scale.y = v; });
-    bind('wi-int', v => el.properties.intensity = v);
-    bind('wi-rad', v => el.properties.radius = v);
-    bind('wi-w', v => el.properties.width = v);
-    bind('wi-h', v => el.properties.height = v);
+    bind('wi-x', v => { el.position.x = v; syncMove(); });
+    bind('wi-y', v => { el.position.y = v; syncMove(); });
+    bind('wi-rot', v => { el.rotation = v * Math.PI / 180; syncPatch({ rotation: el.rotation }); });
+    bind('wi-scale', v => { el.scale.x = v; el.scale.y = v; syncPatch({ scale: { x: v, y: v } }); });
+    bind('wi-int', v => { el.properties.intensity = v; syncPatch({ properties: { intensity: v } }); });
+    bind('wi-rad', v => { el.properties.radius = v; syncPatch({ properties: { radius: v } }); });
+    bind('wi-w', v => { el.properties.width = v; syncPatch({ properties: { width: v } }); });
+    bind('wi-h', v => { el.properties.height = v; syncPatch({ properties: { height: v } }); });
     const delBtn = box.querySelector('#wi-del'); // absent for read-only (co-op participant) popups
     if (delBtn) delBtn.onclick = () => {
       sim.worldDoc.elements = sim.worldDoc.elements.filter(e => e.id !== el.id);
       sim.selectedElement = null;
       sim.buildObstacles();
       sim.renderInspector();
+      // Without this the DELETE never left the page: the server world (authoritative physics!)
+      // and every joiner kept the rock/wall/light forever. Co-opClient.removeElement and
+      // Session._removeElement existed and were tested — nothing in the app ever called them.
+      sim.hooks?.onElementChange?.({ op: 'remove', id: el.id });
     };
   }

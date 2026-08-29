@@ -19,6 +19,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import Matter from 'matter-js';
 import { createCoopGateway } from '../src/net/gateway.js';
+import { pickLanInterfaces } from '../src/net/invite.js';
 
 const ROOT = path.dirname(fileURLToPath(new URL(import.meta.url))); // scripts/
 const APP = path.join(ROOT, '..');                                  // repo root
@@ -35,7 +36,10 @@ const host = process.env.COOP_HOST || '127.0.0.1';
 const gw = createCoopGateway({ Matter, configs, port, host });
 try {
   const { url, port: bound } = await gw.start();
-  const lan = Object.values(os.networkInterfaces()).flat().find?.(i => i.family === 'IPv4' && !i.internal)?.address;
+  // Rank interfaces the same way the merged server does (pickLanInterfaces): "first IPv4" on a
+  // laptop with a VPN up advertises a utun address nobody can join, and a bare `family ===
+  // 'IPv4'` comparison silently filters everything out on old Node (family was 4/6 there).
+  const lan = pickLanInterfaces(os.networkInterfaces())[0]?.address;
   console.log(`\nBraitenberg co-op gateway (M5) listening on ${url}`);
   if (host !== '127.0.0.1' && lan) console.log(`  · LAN:    ws://${lan}:${bound}   (other machines join with this)`);
   else console.log('  · local-only. Set COOP_HOST=0.0.0.0 to accept participants from your LAN.');

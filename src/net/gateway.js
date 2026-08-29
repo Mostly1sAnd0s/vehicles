@@ -127,17 +127,23 @@ export function createCoopGateway({ Matter, dtMs = 1000 / 60, configs, port = 0,
   // broadcast that throws must never take the process with it: when the gateway shares a port with
   // the SPA, an uncaught exception here would also kill every file request. Worlds are isolated
   // from each other, and one bad world is reported (once per error) instead of crashing the rest.
-  const failed = new Set();
+  // Dedup is keyed per world: code -> Set of that world's already-logged error messages. A clean
+  // pass DELETES the world's entry, so a healed world that re-breaks gets logged again, and a
+  // long session cannot grow the set without bound. (The previous shape stored composite
+  // `code + ':' + message` keys in a Set while the success path called failed.delete(code) —
+  // which can never match a composite key, so neither recovery-reset nor cleanup ever happened.)
+  const failed = new Map();
   const sweep = (label, fn) => {
     for (const [code, w] of worlds) {
       try { fn(w); failed.delete(code); }
       catch (err) {
-        const key = code + ':' + (err?.message ?? err);
-        if (!failed.has(key)) {
-          failed.add(key);
-          const msg = `world ${code} ${label} failed: ${err?.message ?? err}`;
+        const key = String(err?.message ?? err);
+        let seen = failed.get(code);
+        if (!seen || !seen.has(key)) {
+          if (!seen) { seen = new Set(); failed.set(code, seen); }
+          seen.add(key);
           if (onStepError) { try { onStepError(err, code, label); } catch {} }
-          else console.error('[coop] ' + msg);
+          else console.error(`[coop] world ${code} ${label} failed: ${key}`);
         }
       }
     }

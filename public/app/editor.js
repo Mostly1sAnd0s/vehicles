@@ -162,6 +162,10 @@ export class VehicleEditor {
     });
     window.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      // Only delete while the EDITOR view is up. The world tab has its own guarded shortcuts;
+      // without this check, pressing Delete on the World tab deleted whatever component was
+      // still selected in the editor (selection survives tab switches).
+      if (this.hooks?.isEditorTabActive && !this.hooks.isEditorTabActive()) return;
       if ((e.key === 'Delete' || e.key === 'Backspace')) {
         if (this.selectedComp) {
           this.removeComponent(this.selectedComp);
@@ -255,7 +259,7 @@ export class VehicleEditor {
     };
     if (isSensor) {
       c.aimAngle = snap.center ? 0 : Math.atan2(snap.normalY, snap.normalX);
-      c.props.range = def.defaults.range;
+      // (props already carry the full cloned defaults, incl. range)
     } else if (def.category === 'special') {
       // special parts (e.g. the Propagator) carry their tuning in props from the start
       for (const k of ['threshold', 'cooldownTicks', 'maxConverted']) {
@@ -485,11 +489,16 @@ export class VehicleEditor {
         ...allGates.flatMap(g => g.id === c.id ? [] : (this.compDef(g.type)?.ports ?? []).filter(p => p.kind === 'logic_in').map(p => ({ id: `gin|${g.id}|${p.id}`, label: `${g.id} · ${this.compDef(g.type)?.name ?? g.type} (in ${p.id.slice(2)})` }))),
       ];
       const srcInto = port => { const w = v.wires.find(x => x.to.componentId === c.id && x.to.port === port); return w ? `${w.from.componentId}|${w.from.port}` : ''; };
-      const dstOfOut = port => { const w = v.wires.find(w => w.from.componentId === c.id && w.from.port === port); return w ? (w.to.port === 'drive' ? `act|${w.to.componentId}` : `gin|${w.to.componentId}|${w.to.port}`) : ''; };
+      // A source tap may legally feed SEVERAL destinations (fan-out; wires created from the
+      // destination's "In" selector are legitimate and routine). The selector displays and
+      // edits the FIRST wire of the tap; the rest are shown as a "+N fan-out" hint so the
+      // panel does not silently lie about the configuration.
+      const outWires = port => v.wires.filter(w => w.from.componentId === c.id && w.from.port === port);
+      const dstOfOut = port => { const w = outWires(port)[0]; return w ? (w.to.port === 'drive' ? `act|${w.to.componentId}` : `gin|${w.to.componentId}|${w.to.port}`) : ''; };
       const opt = (list, cur) => '<option value="">— none —</option>' + list.map(o => `<option value="${o.id}"${o.id === cur ? ' selected' : ''}>${o.label}</option>`).join('');
       html += `<div class="conn" data-ins="${inPorts.length}" data-outs="${outPorts.length}">` +
         inPorts.map(p => `<label>In <select id="conn-in-${p.id}">${opt(srcOpts, srcInto(p.id))}</select></label>`).join('') +
-        outPorts.map(p => `<label>Out <select id="conn-out-${p.id}">${opt(dstOpts, dstOfOut(p.id))}</select></label>`).join('') +
+        outPorts.map(p => `<label>Out <select id="conn-out-${p.id}">${opt(dstOpts, dstOfOut(p.id))}</select>${outWires(p.id).length > 1 ? `<span class="hint"> +${outWires(p.id).length - 1} fan-out</span>` : ''}</label>`).join('') +
         (outPorts.length ? `<button type="button" id="ins-add-out">+ Add Output</button>` : '') +
         `</div>`;
     }
@@ -601,7 +610,11 @@ export class VehicleEditor {
       });
       outputPorts(c, def).forEach(p => {
         box.querySelector('#conn-out-' + p.id)?.addEventListener('change', e => {
-          v.wires = v.wires.filter(w => !(w.from.componentId === c.id && w.from.port === p.id));
+          // Replace ONLY the wire this selector shows (the tap's first). The old wholesale
+          // filter deleted EVERY wire from the tap — so re-pointing a sensor's "Out" after
+          // fanning it out to two motors silently destroyed the other motor's wire.
+          const firstIdx = v.wires.findIndex(w => w.from.componentId === c.id && w.from.port === p.id);
+          if (firstIdx >= 0) v.wires.splice(firstIdx, 1);
           if (e.target.value) {
             const [kind, a, b] = e.target.value.split('|');
             const to = kind === 'act' ? { componentId: a, port: 'drive' } : { componentId: a, port: b };
