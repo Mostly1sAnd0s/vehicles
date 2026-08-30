@@ -87,9 +87,11 @@ test('M5: snapshot carries each mounted component (comps) so thin clients can dr
   const b = JSON.parse(JSON.stringify(sim.snapshot())).bots[0];
   assert.ok(Array.isArray(b.comps), 'snapshot bot must include a comps array');
   // seekerDoc mounts a light sensor at (10,0) and a powered wheel at (0,12).
+  // r is the collision radius the co-op renderer draws each part at (a non-bumper
+  // part keeps its def size; a Bumper would carry its per-instance props.radius here).
   assert.deepEqual(b.comps,
-    [{ id: 'sL', x: 10, y: 0, type: 'light_sensor' }, { id: 'wR', x: 0, y: 12, type: 'powered_wheel' }],
-    'comps must list each local component with its body-local position and type');
+    [{ id: 'sL', x: 10, y: 0, type: 'light_sensor', r: 8 }, { id: 'wR', x: 0, y: 12, type: 'powered_wheel', r: 16 }],
+    'comps must list each local component with its body-local position, type and collision radius');
 });
 
 test('M5: snapshot carries sensor samples + motor forces so thin clients draw shared bots like local ones', () => {

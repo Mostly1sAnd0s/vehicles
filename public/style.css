@@ -87,6 +87,8 @@ main { flex: 1; min-height: 0; display: flex; }
   text-align: center;
 }
 #editor-inspector { border-right: none; border-left: 1px solid var(--line); }
+#editor-inspector label { min-width: 0; overflow: hidden; }
+#editor-inspector input[type="range"] { flex: 1; min-width: 0; }
 .side h3 { margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
 
 .dim { color: var(--dim); }
@@ -140,6 +142,14 @@ main { flex: 1; min-height: 0; display: flex; }
 .fleet-count-input { width: 44px; padding: 1px 3px; font-size: 12px; text-align: center; }
 .fleet-count-input:focus { outline: 1px solid var(--accent, #4da3ff); }
 #palette button, #world-side .side-pane > button { width: 100%; margin: 3px 0; text-align: left; }
+
+/* Gate palette: Neuron full-width, boolean gates in compact rows. */
+#gate-palette { display: flex; flex-direction: column; gap: 4px; }
+#gate-palette button { margin: 0; text-align: center; font-size: 11px; padding: 4px 4px; }
+#gate-palette .gate-full { width: 100%; }
+#gate-palette .gate-row { display: flex; gap: 4px; padding: 0 2px; }
+#gate-palette .gate-row button { flex: 1; min-width: 0; }
+#gate-palette button.placing { border-color: var(--accent); background: rgba(77,163,255,.15); }
 
 /* World sidebar tabs (Sandbox / Co-Op): split the single-player and shared-world controls so the
    user only ever sees the buttons/options for the mode they are in. */
@@ -208,6 +218,23 @@ ul.plain, #placed-list, #wire-list { list-style: none; margin: 0; padding: 0; }
   padding: 8px 10px; border-radius: 8px; display: none;
 }
 #wiring-errors { color: var(--inhibit); font-size: 12px; margin-top: 6px; white-space: pre-line; }
+
+/* Tip box: a bordered callout for contextual hints inside the inspector. */
+.tip-box {
+  margin: 8px 0 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel2);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--dim);
+}
+.tip-box::before {
+  content: "TIP: ";
+  font-weight: 600;
+  color: var(--accent);
+}
 
 .proto-block { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 6px 0; }
 .proto-block h4 { margin: 0 0 6px; font-size: 13px; display: flex; justify-content: space-between; }

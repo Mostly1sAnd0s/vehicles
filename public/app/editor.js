@@ -51,16 +51,44 @@ export class VehicleEditor {
 
     // Logic gates: a separate, non-snapping palette. Click a gate to arm it,
     // then click anywhere on the canvas to drop it at that local position.
+    // Layout: Neuron full-width first (it's the largest/primary logic block),
+    // then two rows of boolean gates: AND/NAND/NOT then OR/NOR/XOR.
     const gatePalette = this.ui.gatePalette;
     if (gatePalette) {
-      for (const def of this.componentsConfig.filter(d => d.category === 'logic')) {
+      const logicDefs = this.componentsConfig.filter(d => d.category === 'logic');
+      const byId = id => logicDefs.find(d => d.id === id);
+      const makeBtn = (def) => {
         const b = document.createElement('button');
         b.textContent = def.name;
+        b.dataset.gate = def.id;
         b.addEventListener('click', () => {
           this.setPlacingGate(this.placingGate === def.id ? null : def.id);
         });
-        gatePalette.appendChild(b);
+        return b;
+      };
+      // Neuron: full width
+      const neuron = byId('neuron');
+      if (neuron) {
+        const btn = makeBtn(neuron);
+        btn.classList.add('gate-full');
+        gatePalette.appendChild(btn);
       }
+      // Row 1: AND, NAND, NOT
+      const row1 = document.createElement('div');
+      row1.className = 'gate-row';
+      for (const id of ['gate_and', 'gate_nand', 'gate_not']) {
+        const def = byId(id);
+        if (def) row1.appendChild(makeBtn(def));
+      }
+      gatePalette.appendChild(row1);
+      // Row 2: OR, NOR, XOR
+      const row2 = document.createElement('div');
+      row2.className = 'gate-row';
+      for (const id of ['gate_or', 'gate_nor', 'gate_xor']) {
+        const def = byId(id);
+        if (def) row2.appendChild(makeBtn(def));
+      }
+      gatePalette.appendChild(row2);
     }
 
   }
@@ -189,9 +217,8 @@ export class VehicleEditor {
 
   setPlacingGate(type) {
     this.placingGate = type;
-    const gateDefs = this.componentsConfig.filter(d => d.category === 'logic');
-    (this.ui.gatePalette?.querySelectorAll('button') ?? []).forEach((b, i) =>
-      b.classList.toggle('placing', type === gateDefs[i]?.id));
+    (this.ui.gatePalette?.querySelectorAll('button') ?? []).forEach(b =>
+      b.classList.toggle('placing', type === b.dataset.gate));
   }
 
   _scale() { return this._viewScale || 1; }
@@ -265,6 +292,10 @@ export class VehicleEditor {
       for (const k of ['threshold', 'cooldownTicks', 'maxConverted']) {
         if (def.defaults?.[k] != null) c.props[k] = def.defaults[k];
       }
+    } else if (def.id === 'bumper') {
+      // a bumper starts at its default collision radius; the inspector's Radius
+      // control edits c.props.radius so the physical barrier matches the drawn ring.
+      c.props = { radius: def.defaults?.radius ?? def.size };
     }
     this.state.vehicle.components.push(c);
     this.selectedComp = c.id;
@@ -505,7 +536,15 @@ export class VehicleEditor {
     if (this.compDef(c.type)?.category === 'sensor') {
       const dig = !!c.props?.digital;
       html += `<label class="check"><input type="checkbox" id="ins-digital"${dig ? ' checked' : ''}> Digital (0/1 for gates)</label>`;
-      html += `<label>Digital threshold <input type="number" id="ins-dthresh" min="0" max="1" step="0.05" value="${c.props?.threshold ?? 0.5}"></label>`;
+      // Only the distance sensor needs a separate digital-threshold field here. The light
+      // sensor's threshold is shown in its own section (same c.props.threshold value, was
+      // previously shown twice). The vehicle-detection sensor's output is already binary
+      // (presence = 1, absent = 0), so toDigital passes it through at any sane threshold
+      // — a threshold field there would be inert.
+      if (c.type === 'distance_sensor') {
+        const thresh = c.props?.threshold ?? 0.5;
+        html += `<label>Digital threshold <input type="number" id="ins-dthresh" min="0" max="1" step="0.05" value="${thresh}"></label>`;
+      }
     }
     if (typeof c.aimAngle === 'number') {
       html += `<label>Aim (rad) <input type="number" id="ins-aim" step="0.1" value="${c.aimAngle.toFixed(2)}"></label>`;
@@ -524,7 +563,7 @@ export class VehicleEditor {
       const lightCfg = this.state.configs?.sensors?.light ?? {};
       const thresh = c.props?.threshold ?? lightCfg.detectionThreshold ?? 0.02;
       html += `<label>Threshold <input type="number" id="ins-thresh" min="0.001" step="0.005" value="${thresh}"></label>`;
-      html += `<div class="hint">reach &asymp; &radic;(intensity / threshold) &mdash; lower to sense from farther</div>`;
+      html += `<div class="tip-box">reach &asymp; &radic;(intensity / threshold) &mdash; lower to sense from farther</div>`;
     }
     if (c.type === 'powered_wheel') {
       const aCfg = this.state.configs.actuators?.powered_wheel ?? {};
@@ -532,7 +571,7 @@ export class VehicleEditor {
       const fr = c.props?.friction ?? aCfg.defaultFriction ?? 0.5;
       html += `<label>Motor power <input type="range" id="ins-mp" min="0" max="3" step="0.05" value="${mp}"> <span id="ins-mp-v">${(+mp).toFixed(2)}</span></label>`;
       html += `<label>Wheel friction <input type="range" id="ins-fr" min="0" max="1" step="0.05" value="${fr}"> <span id="ins-fr-v">${(+fr).toFixed(2)}</span></label>`;
-      html += `<div class="hint">more power = faster; more friction = grip &amp; less coasting (0 = ice)</div>`;
+      html += `<div class="tip-box">more power = faster; more friction = grip &amp; less coasting (0 = ice)</div>`;
     }
     if (c.type === 'propagate') {
       const th = c.props?.threshold ?? 260;
@@ -641,6 +680,13 @@ export class VehicleEditor {
     if (frEl) {
       frEl.addEventListener('input', e => { c.props.friction = Number(e.target.value); box.querySelector('#ins-fr-v').textContent = (+e.target.value).toFixed(2); });
       frEl.addEventListener('change', () => this.refresh());
+    }
+    const bumperEl = box.querySelector('#ins-bumper');
+    if (bumperEl) {
+      // edit the collision radius live; `input` repaints the live editor canvas (the whole
+      // bumper is redrawn at its new radius) and `change` re-renders + re-derives physics.
+      bumperEl.addEventListener('input', e => { c.props.radius = Number(e.target.value); this.draw(); });
+      bumperEl.addEventListener('change', () => this.refresh());
     }
 
   }

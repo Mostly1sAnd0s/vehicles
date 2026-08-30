@@ -22,6 +22,16 @@
       "defaults": {}
     },
     {
+      "id": "bumper",
+      "name": "Bumper",
+      "category": "passive",
+      "mass": 0,
+      "size": 16,
+      "shape": "circle",
+      "ports": [],
+      "defaults": { "radius": 16 }
+    },
+    {
       "id": "light_sensor",
       "name": "Light Sensor",
       "category": "sensor",

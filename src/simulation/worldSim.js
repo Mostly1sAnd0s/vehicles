@@ -13,6 +13,7 @@ import { evaluateVehicleSensors } from './sampleSensors.js';
 import { worldElementsToSnapshot } from './worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../actuators.js';
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from './logic.js';
+import { collisionRadius } from '../models/hitTest.js';
 
 const clone = v => JSON.parse(JSON.stringify(v));
 const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -82,7 +83,7 @@ export class HeadlessWorld {
     const parts = [M.Bodies.rectangle(0, 0, v.body.width, v.body.height, { density: 0.001 })];
     for (const c of v.components ?? []) {
       if (!c.local) continue;
-      parts.push(M.Bodies.circle(c.local.x, c.local.y, this.componentDef(c.type)?.size ?? 8, { density: 0.002 }));
+      parts.push(M.Bodies.circle(c.local.x, c.local.y, collisionRadius(c, this.componentDef(c.type)), { density: 0.002 }));
     }
     return M.Body.create({ parts });
   }
@@ -337,7 +338,7 @@ export class HeadlessWorld {
           // (it used to fall back to #cc3333 red here while the editor drew it blue).
           w: v?.body?.width ?? 80, h: v?.body?.height ?? 40, color: v?.body?.color ?? '#4da3ff',
           // range rides along for distance-sensor beams (the sample itself doesn't carry it)
-          comps: (v.components ?? []).filter(c => c.local).map(c => ({ id: c.id, x: c.local.x, y: c.local.y, type: c.type, range: c.props?.range })),
+          comps: (v.components ?? []).filter(c => c.local).map(c => ({ id: c.id, x: c.local.x, y: c.local.y, type: c.type, range: c.props?.range, r: collisionRadius(c, this.componentDef(c.type)) })),
           // samples already include world-space samplePoint/direction from the server's live pose
           samples: i.lastSamples ?? [],
           motors: i.lastMotors ?? [],

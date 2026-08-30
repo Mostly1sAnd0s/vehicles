@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "id": "sun-car",
-  "name": "Sun Car (Vehicle 2)",
+  "id": "default_vehicle",
+  "name": "Default Vehicle",
   "body": {
     "shape": "rect",
     "width": 80,
-    "height": 40
+    "height": 40,
+    "color": "#4da3ff"
   },
   "components": [
     {
@@ -32,25 +33,31 @@
       "id": "sL",
       "type": "light_sensor",
       "local": {
-        "x": 40,
-        "y": -6.7
+        "x": 47.77817459305202,
+        "y": -27.77817459305202
       },
-      "aimAngle": 0,
+      "aimAngle": -0.7853981633974483,
       "props": {
-        "range": 900
-      }
+        "range": 1000,
+        "fov": 6.283185307179586,
+        "threshold": 0.001
+      },
+      "snapIndex": 3
     },
     {
       "id": "sR",
       "type": "light_sensor",
       "local": {
-        "x": 40,
-        "y": 6.7
+        "x": 47.77817459305202,
+        "y": 27.77817459305202
       },
-      "aimAngle": 0,
+      "aimAngle": 0.7853981633974483,
       "props": {
-        "range": 900
-      }
+        "range": 1000,
+        "fov": 6.283185307179586,
+        "threshold": 0.001
+      },
+      "snapIndex": 6
     }
   ],
   "wires": [
@@ -64,7 +71,7 @@
         "componentId": "wL",
         "port": "drive"
       },
-      "weight": 1.0
+      "weight": 1
     },
     {
       "id": "wire2",
@@ -76,7 +83,7 @@
         "componentId": "wR",
         "port": "drive"
       },
-      "weight": 1.0
+      "weight": 1
     }
   ]
 }

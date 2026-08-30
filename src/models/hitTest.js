@@ -14,7 +14,21 @@ export function componentSize(c, def) {
   if (def?.category === 'actuator' || def?.shape === 'rect') {
     return { kind: 'rect', along: size * 1.5, lateral: size * 0.9 };
   }
-  return { kind: 'circle', radius: size };
+  // A Bumper's draw/hit footprint is its per-instance adjustable radius (props.radius),
+  // falling back to the def default; every other circle component uses the def size.
+  const radius = def?.id === 'bumper' ? (c?.props?.radius ?? c?.radius ?? def.defaults?.radius ?? def.size ?? 8) : size;
+  return { kind: 'circle', radius };
+}
+
+/**
+ * Physics collision radius of a component's composite part (used by the Matter body builder).
+ * A Bumper collides at its per-instance props.radius so the physical barrier matches the
+ * adjustable perimeter the editor draws; every other component keeps the long-standing
+ * def.size footprint. `c` may be a full component (props present) or a partial {local, radius}.
+ */
+export function collisionRadius(c, def) {
+  if (def?.id === 'bumper') return Math.max(0.1, c?.props?.radius ?? c?.radius ?? def.defaults?.radius ?? def.size ?? 8);
+  return def?.size ?? 8;
 }
 
 /** Point-in-component test using the full element footprint. */

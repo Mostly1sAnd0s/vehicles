@@ -26,7 +26,7 @@ function normalizeBot(b) {
     // sender that omitted a color (worldSim carries a comment demanding the two stay in sync).
     w: num(b?.w, 80), h: num(b?.h, 40), color: b?.color ?? '#4da3ff',
     comps: Array.isArray(b?.comps)
-      ? b.comps.map(c => ({ id: c?.id, x: num(c?.x), y: num(c?.y), type: c?.type, range: optNum(c?.range) }))
+      ? b.comps.map(c => ({ id: c?.id, x: num(c?.x), y: num(c?.y), type: c?.type, range: optNum(c?.range), r: optNum(c?.r) }))
       : [],
     // Sensor results from the server's latest step (world-space samplePoint/direction included),
     // so beams + on-body readouts render identically to a local instance.

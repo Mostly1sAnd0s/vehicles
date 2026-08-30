@@ -7,7 +7,7 @@ import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
-import { findInstanceAt, componentSize } from '../src/models/hitTest.js';
+import { findInstanceAt, componentSize, collisionRadius } from '../src/models/hitTest.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
@@ -84,7 +84,7 @@ export class WorldSim {
     for (const c of v.components) {
       if (!c.local) continue;
       const def = this.componentDef(c.type);
-      parts.push(M.Bodies.circle(c.local.x, c.local.y, def?.size ?? 8, { density: 0.002 }));
+      parts.push(M.Bodies.circle(c.local.x, c.local.y, collisionRadius(c, def), { density: 0.002 }));
     }
     return M.Body.create({ parts });
   }
@@ -869,7 +869,7 @@ export class WorldSim {
       if (Array.isArray(b.comps)) {
         for (const comp of b.comps) {
           const def = this.componentDef(comp.type);
-          const s = componentSize({ local: { x: comp.x, y: comp.y } }, def);
+          const s = componentSize({ local: { x: comp.x, y: comp.y }, props: { radius: comp.r } }, def);
           ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
           if (s.kind === 'rect') {
             // beginPath FIRST: without it the component rect is APPENDED to the path that still
