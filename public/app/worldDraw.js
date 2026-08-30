@@ -93,11 +93,19 @@ export function drawWorld(sim) {
           ctx.rotate(c.localRotation ?? 0);
           ctx.rect(-s.along / 2, -s.lateral / 2, s.along, s.lateral);
           ctx.restore();
+          ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
+          ctx.fill();
+        } else if (c.type === 'bumper') {
+          // collision barrier: outline ring (no fill) at its live collision radius
+          ctx.arc(c.local.x, c.local.y, s.radius, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(200,210,225,0.9)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
         } else {
           ctx.arc(c.local.x, c.local.y, s.radius, 0, Math.PI * 2);
+          ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
+          ctx.fill();
         }
-        ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
-        ctx.fill();
       }
       // conversion flash: a freshly-converted robot rings green, fading over 700ms.
       if (inst.flashUntil && typeof performance !== 'undefined' && inst.flashUntil > performance.now()) {

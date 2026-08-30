@@ -870,8 +870,15 @@ export class WorldSim {
         for (const comp of b.comps) {
           const def = this.componentDef(comp.type);
           const s = componentSize({ local: { x: comp.x, y: comp.y }, props: { radius: comp.r } }, def);
-          ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
-          if (s.kind === 'rect') {
+          if (comp.type === 'bumper') {
+            // collision barrier: outline ring (no fill) at the per-instance live radius (comp.r)
+            ctx.beginPath();
+            ctx.arc(comp.x, comp.y, s.radius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(200,210,225,0.9)';
+            ctx.lineWidth = 2 / this.view.zoom;
+            ctx.stroke();
+          } else if (s.kind === 'rect') {
+            ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
             // beginPath FIRST: without it the component rect is APPENDED to the path that still
             // holds the body rect, and fill() repaints the whole body in the component color on
             // top of the vehicle's editor color (the bug behind "co-op bots all look blue").
@@ -882,6 +889,7 @@ export class WorldSim {
             ctx.fill();
             ctx.restore();
           } else {
+            ctx.fillStyle = def?.category === 'actuator' ? '#35547a' : '#2f6b46';
             ctx.beginPath();
             ctx.arc(comp.x, comp.y, s.radius, 0, Math.PI * 2);
             ctx.fill();

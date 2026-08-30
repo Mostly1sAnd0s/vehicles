@@ -293,9 +293,10 @@ export class VehicleEditor {
         if (def.defaults?.[k] != null) c.props[k] = def.defaults[k];
       }
     } else if (def.id === 'bumper') {
-      // a bumper starts at its default collision radius; the inspector's Radius
+      // a bumper starts at its default collision radius, clamped into the slider's
+      // [25,100] range so a fresh Bumper is already a legal size; the inspector's Radius
       // control edits c.props.radius so the physical barrier matches the drawn ring.
-      c.props = { radius: def.defaults?.radius ?? def.size };
+      c.props = { radius: Math.min(100, Math.max(25, def.defaults?.radius ?? def.size ?? 25)) };
     }
     this.state.vehicle.components.push(c);
     this.selectedComp = c.id;
@@ -619,6 +620,20 @@ export class VehicleEditor {
           ${opts.map(([v, l]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${l}</option>`).join('')}
         </select></label>`;
     }
+    // Bumper (category: passive): an adjustable-radius collision barrier. The Radius
+    // slider edits c.props.radius (live re-draw on input, physics re-derivation on
+    // change — see the binding below). This block is what actually emits #ins-bumper;
+    // the binding only wires it up.
+    if (c.type === 'bumper') {
+      const bdef = this.compDef('bumper');
+      // clamp the displayed value into the slider's [25,100] range so the thumb, the numeric
+      // readout and the physics (which reads c.props.radius) all agree once the user drags.
+      const MIN = 25, MAX = 100;
+      const radius = c.props?.radius ?? bdef?.defaults?.radius ?? bdef?.size ?? MIN;
+      const shown = Math.min(MAX, Math.max(MIN, Math.round(radius)));
+      html += `<label>Radius <input type="range" id="ins-bumper" min="${MIN}" max="${MAX}" step="1" value="${shown}"> <span id="ins-bumper-v">${shown}</span></label>`;
+      html += `<div class="tip-box">Bumper: a circular collision barrier (drawn as a ring at its live radius). Other prototypes cannot cross it; same-prototype clones still pass through. Mount on the body-centre node for a whole-vehicle perimeter, or an edge node for a local bumper.</div>`;
+    }
     box.innerHTML = html;
     this._bindBodyColor(box, v);
 
@@ -685,7 +700,13 @@ export class VehicleEditor {
     if (bumperEl) {
       // edit the collision radius live; `input` repaints the live editor canvas (the whole
       // bumper is redrawn at its new radius) and `change` re-renders + re-derives physics.
-      bumperEl.addEventListener('input', e => { c.props.radius = Number(e.target.value); this.draw(); });
+      // guard c.props for imported bumpers that carry none (place() sets it, JSON import may not).
+      bumperEl.addEventListener('input', e => {
+        c.props = c.props ?? {};
+        c.props.radius = Number(e.target.value);
+        box.querySelector('#ins-bumper-v').textContent = c.props.radius;
+        this.draw();
+      });
       bumperEl.addEventListener('change', () => this.refresh());
     }
 
@@ -920,13 +941,22 @@ export class VehicleEditor {
       }
       // inverted sensors / reverse motors are tinted red (was the wire polarity color)
       const inverted = c.polarity === 'inverted' || c.polarity === 'reverse';
-      ctx.fillStyle = inverted ? '#6e2b3a'
-        : def?.category === 'actuator' ? '#35547a'
-        : def?.category === 'sensor' ? '#2f6b46' : 'rgba(138,151,168,.6)';
-      if (c.id === this.selectedComp) ctx.strokeStyle = '#ffffff'; else ctx.strokeStyle = inverted ? '#ff5d5d' : '#10141a';
-      ctx.lineWidth = 2;
-      ctx.fill();
-      ctx.stroke();
+      if (c.type === 'bumper') {
+        // Bumper = a collision barrier, not a solid part: draw it as an outline RING at its
+        // live collision radius (componentSize already returns that live radius for a bumper),
+        // so it never masks the body underneath and reads as a barrier, not a solid mount.
+        ctx.strokeStyle = c.id === this.selectedComp ? '#ffffff' : 'rgba(138,151,168,.9)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = inverted ? '#6e2b3a'
+          : def?.category === 'actuator' ? '#35547a'
+          : def?.category === 'sensor' ? '#2f6b46' : 'rgba(138,151,168,.6)';
+        if (c.id === this.selectedComp) ctx.strokeStyle = '#ffffff'; else ctx.strokeStyle = inverted ? '#ff5d5d' : '#10141a';
+        ctx.lineWidth = 2;
+        ctx.fill();
+        ctx.stroke();
+      }
 
       if (typeof c.aimAngle === 'number') {
         const r = s.kind === 'circle' ? s.radius : Math.max(s.along, s.lateral) / 2;
