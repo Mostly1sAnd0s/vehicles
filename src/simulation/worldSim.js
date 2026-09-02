@@ -14,6 +14,7 @@ import { worldElementsToSnapshot } from './worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../actuators.js';
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from './logic.js';
 import { collisionRadius } from '../models/hitTest.js';
+import { bumperAnchorsFor, applyBumperForces } from './bumpers.js';
 
 const clone = v => JSON.parse(JSON.stringify(v));
 const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -83,6 +84,7 @@ export class HeadlessWorld {
     const parts = [M.Bodies.rectangle(0, 0, v.body.width, v.body.height, { density: 0.001 })];
     for (const c of v.components ?? []) {
       if (!c.local) continue;
+      if (this.componentDef(c.type)?.id === 'bumper') continue; // ring force field, not a solid part (bumpers.js)
       parts.push(M.Bodies.circle(c.local.x, c.local.y, collisionRadius(c, this.componentDef(c.type)), { density: 0.002 }));
     }
     return M.Body.create({ parts });
@@ -271,6 +273,12 @@ export class HeadlessWorld {
     const M = this.M;
     for (const inst of this.instances) if (inst.body) this._applyWheelFriction(inst);
     M.Engine.update(this.engine, this.dtMs);      // matter-js physics — collisions/bumps happen here
+    // Bumper ring fields (soft radial barriers, see bumpers.js): every ring pushes back any
+    // other bot whose surface — body parts OR bumper rings — crosses it (stiffness = density).
+    const bumperEntries = this.instances
+      .filter(i => i?.body)
+      .map(i => ({ body: i.body, bumpers: bumperAnchorsFor(this.vehicleFor(i), i.body) }));
+    if (bumperEntries.some(e => e.bumpers.length)) applyBumperForces(M, bumperEntries);
     this._stepPropagation();
 
     const snapshot = worldElementsToSnapshot(this.worldDoc.elements ?? {});

@@ -184,6 +184,15 @@ Done (single-player):
   status pill reports converted/total; `reset()` restores the initial mix
 - **Vehicle detection sensor**: FOV-cone + range sensor that detects another
   vehicle (aim/range/FOV, cone beam viz, on-body readout)
+- **Bumper (hollow-ring force barrier)**: a passive part drawn as an outline ring at its live
+  per-instance Radius. It is *not* a solid Matter part — each step the ring pushes back any
+  other bot that crosses it, with its body parts *or its own bumper rings* (rings push
+  rings; the bumper's own vehicle is exempt, and the ring's interior is passable). The
+  **Density** slider (0.1–50, default 10) sets the ring's stiffness: 50 is effectively
+  solid, 10 holds a top-speed bot, low values let a fast bot push through — so swarms
+  squish against each other at ring distance instead of tunnelling through, and
+  radius/density edits apply on the very next step with no physics rebuild
+  (`src/simulation/bumpers.js`)
 - Per-vehicle **body color** (fill + lightened outline) via an always-visible 4x4
   swatch palette; the editor canvas and the world render the same color
 - **"+Paths"** toggle: capped motion trails per robot, cleared on reset

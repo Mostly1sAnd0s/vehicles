@@ -8,6 +8,7 @@ import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
 import { findInstanceAt, componentSize, collisionRadius } from '../src/models/hitTest.js';
+import { bumperAnchorsFor, applyBumperForces } from '../src/simulation/bumpers.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
@@ -84,6 +85,7 @@ export class WorldSim {
     for (const c of v.components) {
       if (!c.local) continue;
       const def = this.componentDef(c.type);
+      if (def?.id === 'bumper') continue; // ring force field, not a solid part (src/simulation/bumpers.js)
       parts.push(M.Bodies.circle(c.local.x, c.local.y, collisionRadius(c, def), { density: 0.002 }));
     }
     return M.Body.create({ parts });
@@ -102,7 +104,9 @@ export class WorldSim {
         inst.wireSig = wireSig;
         this.instWireMap(inst);
       }
-      const geoSig = JSON.stringify((v.components ?? []).map(c => [c.id, c.type, c.local?.x, c.local?.y]));
+      // props in the signature too: a bumper's radius/density (or any future prop-driven
+      // geometry) must trigger a rebuild, not just a move or type change.
+      const geoSig = JSON.stringify((v.components ?? []).map(c => [c.id, c.type, c.local?.x, c.local?.y, c.props ?? null]));
       if (inst.body && geoSig === inst.geoSig) continue;
       const old = inst.body;
       if (old) M.Composite.remove(this.engine.world, old);
@@ -252,6 +256,13 @@ export class WorldSim {
     const M = this.M;
     for (const inst of this.instances) if (inst.body) this.applyWheelFriction(inst);
     M.Engine.update(this.engine, this.dtMs);
+    // Bumper ring fields (soft radial barriers, see src/simulation/bumpers.js): every ring
+    // pushes back any other bot whose surface — body parts OR bumper rings — crosses it,
+    // stiffness = per-instance density.
+    const bumperEntries = this.instances
+      .filter(i => i?.body)
+      .map(i => ({ body: i.body, bumpers: bumperAnchorsFor(this.vehicleFor(i), i.body) }));
+    if (bumperEntries.some(e => e.bumpers.length)) applyBumperForces(M, bumperEntries);
 
     // Record trajectory points for the Paths overlay. Capped; cleared on reset().
     for (const inst of this.instances) {

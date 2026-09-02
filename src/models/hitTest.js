@@ -21,10 +21,12 @@ export function componentSize(c, def) {
 }
 
 /**
- * Physics collision radius of a component's composite part (used by the Matter body builder).
- * A Bumper collides at its per-instance props.radius so the physical barrier matches the
- * adjustable perimeter the editor draws; every other component keeps the long-standing
- * def.size footprint. `c` may be a full component (props present) or a partial {local, radius}.
+ * Draw footprint radius of a circular component (editor/world renderers and the co-op
+ * snapshot's per-component `r`). A Bumper reports its per-instance props.radius so the
+ * drawn ring matches the adjustable barrier the sim's force field enforces
+ * (src/simulation/bumpers.js — the Bumper itself is no longer a solid Matter part);
+ * every other component keeps the long-standing def.size footprint.
+ * `c` may be a full component (props present) or a partial {local, radius}.
  */
 export function collisionRadius(c, def) {
   if (def?.id === 'bumper') return Math.max(0.1, c?.props?.radius ?? c?.radius ?? def.defaults?.radius ?? def.size ?? 8);

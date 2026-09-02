@@ -293,10 +293,13 @@ export class VehicleEditor {
         if (def.defaults?.[k] != null) c.props[k] = def.defaults[k];
       }
     } else if (def.id === 'bumper') {
-      // a bumper starts at its default collision radius, clamped into the slider's
-      // [25,100] range so a fresh Bumper is already a legal size; the inspector's Radius
-      // control edits c.props.radius so the physical barrier matches the drawn ring.
-      c.props = { radius: Math.min(100, Math.max(25, def.defaults?.radius ?? def.size ?? 25)) };
+      // a bumper is a hollow-ring force barrier (src/simulation/bumpers.js), not a solid part:
+      // radius + density start at the def defaults, clamped into the slider's [25,100] range
+      // so a fresh Bumper is already a legal size; the sim reads both live every step.
+      c.props = {
+        radius: Math.min(100, Math.max(25, def.defaults?.radius ?? def.size ?? 25)),
+        density: def.defaults?.density ?? 10,
+      };
     }
     this.state.vehicle.components.push(c);
     this.selectedComp = c.id;
@@ -626,13 +629,16 @@ export class VehicleEditor {
     // the binding only wires it up.
     if (c.type === 'bumper') {
       const bdef = this.compDef('bumper');
-      // clamp the displayed value into the slider's [25,100] range so the thumb, the numeric
-      // readout and the physics (which reads c.props.radius) all agree once the user drags.
+      // clamp the displayed values into the sliders' ranges so the thumb, the numeric readout
+      // and the sim's force field (which reads c.props live every step) all agree.
       const MIN = 25, MAX = 100;
       const radius = c.props?.radius ?? bdef?.defaults?.radius ?? bdef?.size ?? MIN;
       const shown = Math.min(MAX, Math.max(MIN, Math.round(radius)));
+      const DMIN = 0.1, DMAX = 50;
+      const dens = Math.min(DMAX, Math.max(DMIN, Number(c.props?.density ?? bdef?.defaults?.density ?? 10) || 10));
       html += `<label>Radius <input type="range" id="ins-bumper" min="${MIN}" max="${MAX}" step="1" value="${shown}"> <span id="ins-bumper-v">${shown}</span></label>`;
-      html += `<div class="tip-box">Bumper: a circular collision barrier (drawn as a ring at its live radius). Other prototypes cannot cross it; same-prototype clones still pass through. Mount on the body-centre node for a whole-vehicle perimeter, or an edge node for a local bumper.</div>`;
+      html += `<label>Density <input type="range" id="ins-bumper-d" min="${DMIN}" max="${DMAX}" step="0.1" value="${dens.toFixed(1)}"> <span id="ins-bumper-dv">${dens.toFixed(1)}</span></label>`;
+      html += `<div class="tip-box">Bumper: a hollow ring force barrier. Every other bot that crosses the ring — with its body OR its own bumpers (rings push rings) — is pushed back; Density is how stiff the ring is — 50 is effectively solid, 10 holds a top-speed bot, low values let a fast bot push through. The inside of the ring is passable. Mount on the body-centre node for a whole-vehicle perimeter, or an edge node for a local bump.</div>`;
     }
     box.innerHTML = html;
     this._bindBodyColor(box, v);
@@ -698,9 +704,10 @@ export class VehicleEditor {
     }
     const bumperEl = box.querySelector('#ins-bumper');
     if (bumperEl) {
-      // edit the collision radius live; `input` repaints the live editor canvas (the whole
-      // bumper is redrawn at its new radius) and `change` re-renders + re-derives physics.
-      // guard c.props for imported bumpers that carry none (place() sets it, JSON import may not).
+      // edit the ring radius live; `input` repaints the live editor canvas (the whole bumper is
+      // redrawn at its new radius). The sim's force field reads c.props.radius on the next step,
+      // so no physics-body rebuild is ever out of sync with the drawn ring. `change` re-renders
+      // (and live-syncs co-op). Guard c.props for imported bumpers that carry none.
       bumperEl.addEventListener('input', e => {
         c.props = c.props ?? {};
         c.props.radius = Number(e.target.value);
@@ -708,6 +715,16 @@ export class VehicleEditor {
         this.draw();
       });
       bumperEl.addEventListener('change', () => this.refresh());
+    }
+    const bumperDEl = box.querySelector('#ins-bumper-d');
+    if (bumperDEl) {
+      // edit the ring stiffness live; the force field reads c.props.density every step.
+      bumperDEl.addEventListener('input', e => {
+        c.props = c.props ?? {};
+        c.props.density = Number(e.target.value);
+        box.querySelector('#ins-bumper-dv').textContent = c.props.density.toFixed(1);
+      });
+      bumperDEl.addEventListener('change', () => this.refresh());
     }
 
   }
