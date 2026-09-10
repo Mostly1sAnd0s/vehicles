@@ -214,9 +214,22 @@ ul.plain, #placed-list, #wire-list { list-style: none; margin: 0; padding: 0; }
 #world-controls[hidden] { display: none; }
 #world-inspector {
   position: absolute; right: 10px; top: 10px; width: 200px;
+  max-width: calc(100vw - 20px);
   background: rgba(26,33,43,.95); border: 1px solid var(--line);
   padding: 8px 10px; border-radius: 8px; display: none;
 }
+/* Contain rows inside the panel. `input[type=range]` is `width:240px` globally (see the
+   form rules above) while this popup is only 200px wide, and a flex label will not shrink
+   its children below their specified size unless it allows it — so the slider used every
+   pixel of its row and then ran past the panel's right edge (and off-screen, the popup
+   being pinned to `right:10px`). Measured: slider 240px in a 200px box, right edge 14px
+   beyond the panel. `min-width:0` on the label releases its automatic minimum size and
+   `flex:1 1 auto; width:auto` lets the slider take only what the row has left — the same
+   pattern `#editor-inspector` already uses for its Radius/Density sliders, which is why
+   only this popup showed it. Holds for any future slider row and any label length. */
+#world-inspector label { min-width: 0; }
+#world-inspector input[type="range"] { flex: 1 1 auto; min-width: 0; width: auto; }
+#world-inspector .tip-box { min-width: 0; overflow-wrap: break-word; }
 #wiring-errors { color: var(--inhibit); font-size: 12px; margin-top: 6px; white-space: pre-line; }
 
 /* Tip box: a bordered callout for contextual hints inside the inspector. */

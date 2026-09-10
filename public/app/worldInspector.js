@@ -1,6 +1,14 @@
 /**
  * World element inspector panel (extracted from WorldSim.renderInspector).
  */
+import {
+  isSolidLight,
+  authoredLightRadius,
+  lightConfig,
+  DEFAULT_LIGHT_MIN_RADIUS,
+  DEFAULT_LIGHT_MAX_RADIUS,
+} from '../src/models/solidBody.js';
+
 export function renderWorldInspector(sim) {
     const box = sim.ui.worldInspector;
 
@@ -68,14 +76,28 @@ export function renderWorldInspector(sim) {
     const ro = canEdit ? '' : 'disabled';
     box.style.display = 'block';
     const isLight = el.type === 'light';
+    // Imported world JSON can carry an element with no `properties` object at all.
+    // The template below reads (and the handlers write) `el.properties.X` directly,
+    // so materialise it once here — the same hardening the Bumper inspector needed.
+    if (!el.properties || typeof el.properties !== 'object') el.properties = {};
+    // Solid-light controls: bounds come from config/world.json, never hard-coded.
+    const cfg = sim.state?.configs;
+    const wcfg = lightConfig(cfg);
+    const RMIN = wcfg.minRadius ?? DEFAULT_LIGHT_MIN_RADIUS;
+    const RMAX = Math.max(RMIN, wcfg.maxRadius ?? DEFAULT_LIGHT_MAX_RADIUS);
+    const solid = isSolidLight(el, cfg);
+    const rShown = Math.round(authoredLightRadius(el, cfg));
     box.innerHTML = `
       <h3 style="margin:0 0 6px">${isLight ? 'Light source' : 'Obstacle'}${canEdit ? '' : ' (read-only)'}</h3>
       <label>X <input type="number" id="wi-x" value="${Math.round(el.position.x)}" ${ro}></label>
       <label>Y <input type="number" id="wi-y" value="${Math.round(el.position.y)}" ${ro}></label>
-      <label>Rot° <input type="number" id="wi-rot" step="5" value="${Math.round(el.rotation * 180 / Math.PI)}" ${ro}></label>
+      ${isLight ? '' : `<label>Rot° <input type="number" id="wi-rot" step="5" value="${Math.round((el.rotation ?? 0) * 180 / Math.PI)}" ${ro}></label>`}
       <label>Scale <input type="number" id="wi-scale" step="0.1" value="${el.scale?.x ?? 1}" ${ro}></label>
       ${isLight
-        ? `<label>Intensity <input type="number" id="wi-int" step="100" value="${el.properties.intensity ?? 1}" ${ro}></label>`
+        ? `<label>Intensity <input type="number" id="wi-int" step="100" value="${el.properties.intensity ?? 1}" ${ro}></label>
+           <label class="check"><input type="checkbox" id="wi-solid"${solid ? ' checked' : ''} ${ro}> Solid body (vehicles bump into it)</label>
+           ${solid ? `<label>Body radius <input type="range" id="wi-sradius" min="${RMIN}" max="${RMAX}" step="1" value="${rShown}" ${ro}> <span id="wi-sradius-v">${rShown}</span></label>
+             <div class="tip-box">The ring drawn on the lamp IS this radius — the barrier and the picture are the same number. Light sensing is unaffected.</div>` : ''}`
         : el.primitive === 'circle'
           ? `<label>Radius <input type="number" id="wi-rad" value="${el.properties.radius ?? 10}" ${ro}></label>`
           : `<label>Width <input type="number" id="wi-w" value="${el.properties.width ?? 20}" ${ro}></label>
@@ -89,12 +111,59 @@ export function renderWorldInspector(sim) {
     const bind = (id, fn) => { if (!canEdit) return; box.querySelector('#' + id)?.addEventListener('change', e => { fn(Number(e.target.value)); sim.buildObstacles(); sim.renderInspector(); }); };
     bind('wi-x', v => { el.position.x = v; syncMove(); });
     bind('wi-y', v => { el.position.y = v; syncMove(); });
+    // Rot is not emitted for a light (a circle has no orientation), so bind() finds
+    // nothing there — that is intentional, not a missing control.
     bind('wi-rot', v => { el.rotation = v * Math.PI / 180; syncPatch({ rotation: el.rotation }); });
     bind('wi-scale', v => { el.scale.x = v; el.scale.y = v; syncPatch({ scale: { x: v, y: v } }); });
     bind('wi-int', v => { el.properties.intensity = v; syncPatch({ properties: { intensity: v } }); });
     bind('wi-rad', v => { el.properties.radius = v; syncPatch({ properties: { radius: v } }); });
     bind('wi-w', v => { el.properties.width = v; syncPatch({ properties: { width: v } }); });
     bind('wi-h', v => { el.properties.height = v; syncPatch({ properties: { height: v } }); });
+    // Solid-light controls. `bind()` coerces with Number(), which is wrong for a
+    // checkbox, so these are wired directly. Both rebuild the physics bodies and
+    // re-render the panel, so the ring, the readout and the barrier move together.
+    const solidEl = box.querySelector('#wi-solid');
+    if (solidEl && canEdit) {
+      solidEl.addEventListener('change', e => {
+        const on = !!e.target.checked;
+        el.properties.solid = on;
+        // Materialise the radius on the way IN so the element is self-describing and
+        // round-trips through JSON import / the co-op wire with its size intact.
+        if (on && !Number.isFinite(Number(el.properties.radius))) {
+          el.properties.radius = authoredLightRadius(el, cfg);
+        }
+        sim.buildObstacles();
+        // Nudge (don't fling) any bot the new barrier landed on top of, before the
+        // patch goes out so the shared world evicts identically.
+        if (on) sim.evictOverlappingBots();
+        syncPatch({ properties: { solid: on } });
+        sim.renderInspector(); // reveals/hides the radius row
+      });
+    }
+    const srEl = box.querySelector('#wi-sradius');
+    if (srEl && canEdit) {
+      // A non-numeric value keeps the current authored radius rather than writing
+      // NaN into props.radius — a NaN obstacle radius builds a degenerate Matter
+      // body with NaN inertia, which poisons the whole world, not just this lamp.
+      const clamp = v => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return authoredLightRadius(el, cfg);
+        return Math.min(RMAX, Math.max(RMIN, Math.round(n)));
+      };
+      // `input` repaints live (ring + barrier together, no wire traffic); `change`
+      // syncs out on release — the same split the Bumper slider uses.
+      srEl.addEventListener('input', e => {
+        el.properties.radius = clamp(e.target.value);
+        const readout = box.querySelector('#wi-sradius-v');
+        if (readout) readout.textContent = el.properties.radius;
+        sim.buildObstacles();
+      });
+      srEl.addEventListener('change', e => {
+        el.properties.radius = clamp(e.target.value);
+        syncPatch({ properties: { radius: el.properties.radius } });
+        sim.renderInspector();
+      });
+    }
     const delBtn = box.querySelector('#wi-del'); // absent for read-only (co-op participant) popups
     if (delBtn) delBtn.onclick = () => {
       sim.worldDoc.elements = sim.worldDoc.elements.filter(e => e.id !== el.id);

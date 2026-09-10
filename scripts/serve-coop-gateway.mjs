@@ -25,10 +25,12 @@ const ROOT = path.dirname(fileURLToPath(new URL(import.meta.url))); // scripts/
 const APP = path.join(ROOT, '..');                                  // repo root
 const J = (p) => readFile(path.join(APP, p), 'utf8').then((t) => JSON.parse(t));
 
-const [appCfg, components, sensors, actuators] = await Promise.all([
+const [appCfg, components, sensors, actuators, worldCfg] = await Promise.all([
   J('config/app.json'), J('config/components.json'), J('config/sensors.json'), J('config/actuators.json'),
+  // OPTIONAL: a missing world.json must not stop the gateway (built-in fallbacks apply).
+  J('config/world.json').catch(() => ({})),
 ]);
-const configs = { app: appCfg, components, sensors, actuators };
+const configs = { app: appCfg, components, sensors, actuators, world: worldCfg };
 
 const port = Number(process.env.COOP_PORT || 8090);
 const host = process.env.COOP_HOST || '127.0.0.1';

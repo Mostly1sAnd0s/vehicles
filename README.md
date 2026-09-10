@@ -60,13 +60,15 @@ not commit it, and a checkout needs `npm run build` before the page resolves
 ## Test (TDD)
 
 ```bash
-npm test                 # 262 unit tests (node --test, no framework)
-npm run smoke            # all eight headless-Chrome probes below, in sequence
+npm test                 # 338 unit tests (node --test, no framework)
+npm run smoke            # all nine headless-Chrome probes below, in sequence
 npm run smoke:editor     # place + drag-snap + wire, gates + slots, body color via UI
 npm run smoke:world      # sim runs; sensor/motor polarity, detection, propagation
 npm run smoke:crud       # add/remove vehicle types, drag a running robot to reposition
 npm run smoke:neurons    # Neuron response editor + "Add Output" multi-output taps
 npm run smoke:tabs       # Sandbox/Co-Op sidebar tabs, design row, Deploy gating
+npm run smoke:solid      # solid light: inspector toggle, ring===barrier, bump-and-stop,
+                         #   eviction, and the soft-light control run
 npm run smoke:coop       # co-op panel: host→code, deploy, fleet ±/✕, element sync, prune+GC
 npm run smoke:merged     # `npm run serve` itself: one port serves SPA + /info + WebSocket,
                          #   invite link built from /info, zero-click join, leave-means-leave
@@ -83,12 +85,38 @@ Smoke tests are self-contained (each starts its own static server and drives
 headless Chrome over raw CDP — no Puppeteer) and need a Chrome/Chromium at the
 `CHROME` constant in each script — the macOS Google Chrome path by default, or
 point `CHROME=/usr/bin/chromium-browser` (or any build) at a different one. Each
-probe owns its own web port (8901–8905, 8907, 8915, 8925 — no two probes share
+probe owns its own web port (8901–8905, 8907, 8915, 8925, 8935 — no two probes share
 one), CDP debug port, and Chrome profile dir (plus a gateway port for the co-op
 ones — `coop.panel` 8961, `coop.session` 8963, `world.tabs` 8975) and cleans up
 after itself, so the sequence inside `npm run smoke` can never race on a port.
 Stale headless Chrome is the usual cause of "devtools not reachable"; each probe
 `pkill`s only its own profile.
+
+`smoke:solid` takes the profile name one step further and uses a **unique profile per
+run** (`/tmp/bv-profile-solid-<pid>`). `python3 -m http.server` sends no
+`Cache-Control`, so a reused profile lets Chrome's heuristic caching serve a
+world/config JSON captured on an earlier run — the app then edits a stale document and
+the probe fails for reasons that have nothing to do with the code under test. If you
+add a probe that asserts on a file under `public/`, give it a fresh profile too.
+
+That hazard is REAL, not theoretical, and it has two halves — both were measured while
+writing the solid-light work, and each produced a probe result that was flatly wrong:
+
+- **Stale files from a reused profile.** A probe asserted a light's popup had no Rotation
+  field, and it kept failing — while a `fetch(..., {cache:'no-store'})` of the same module
+  in the same page showed the new code. The page had been served the old module out of the
+  profile's cache. `coop.session` deletes its profile at startup, but a Chrome still dying
+  from the PREVIOUS run re-creates it (with its cache) after the `rm`; the reset has to
+  wait for the old browser to actually exit, or use a unique name per run.
+- **Attaching to a stale page.** Every probe's CDP port is fixed, and Chrome exits quickly
+  but `chrome --remote-debugging-port` takes a moment to release it. If anything is still
+  listening when a probe starts, `GET /json` answers and the probe drives **that** page —
+  possibly one loaded from an entirely different checkout — and reports green. So
+  `smoke:solid` frees its CDP port before launching and puts a unique `?nc=<runid>` on its
+  URL, then refuses to proceed unless the page it attached to reports that same nonce.
+
+The rule when a probe disagrees with the source you can read: **distrust the probe**. Check
+`curl http://127.0.0.1:<cdp>/json` for the page URL, and who owns the web port.
 
 ## Layout
 
@@ -98,6 +126,10 @@ config/                 JSON config (source of truth)
   components.json         every placeable part + logic gates + Neuron + Propagator
   sensors.json            light / distance / vehicle-detection sensor models
   actuators.json          powered-wheel model (power, friction, power curve)
+  world.json              world-element defaults — the solid-light radius, its
+                          min/max bounds and eviction clearance. OPTIONAL at runtime:
+                          every read falls back to a built-in, so an old
+                          public/config/ checkout still boots
   ui.json                 keyboard shortcuts
 
 src/                    testable core (pure ESM, no DOM) — linked in as public/src
@@ -109,6 +141,11 @@ src/                    testable core (pure ESM, no DOM) — linked in as public
   models/wiring.js        wiring validation (duplicates, port-type mismatch, weight,
                           dynamic multi-output taps via outputPorts)
   models/hitTest.js       component footprints, nearest snap, instance hit-testing
+  models/solidBody.js     the solid-light numbers: isSolidLight, solidLightRadius
+                          (clamped, scaled, never NaN), authoredLightRadius (what the
+                          slider binds to), solidLightCircles, pushOutOfCircle — pure,
+                          so the drawn ring, the readout and the Matter body cannot
+                          disagree
   sensors/light.js        distance-normalized level, effective range (drives beam
                           length), cone helper (inFov)
   sensors/raycast.js      ray vs circle / rotated rect (pure geometry)
@@ -119,7 +156,10 @@ src/                    testable core (pure ESM, no DOM) — linked in as public
                           Neuron's analog branch, and the Propagator core
                           (signature / target select / deep clone)
   simulation/transfer.js  Neuron response curves: bell / triangle / custom spline
-  simulation/worldSnapshot.js   world elements -> {lights, obstacles}
+  simulation/worldSnapshot.js   world elements -> {lights, obstacles}. THE seam for
+                          static geometry: both engines build bodies from it, so a
+                          rule added here lands in single-player, the authoritative
+                          co-op world and the raycaster at once
   simulation/worldSim.js  HeadlessWorld — the whole per-step loop, Node-runnable
                           (matter step, friction, propagation, sensor→logic→motor)
   session.js              Session — transport-agnostic co-op rules: participants,
@@ -193,6 +233,30 @@ Done (single-player):
   squish against each other at ring distance instead of tunnelling through, and
   radius/density edits apply on the very next step with no physics rebuild
   (`src/simulation/bumpers.js`)
+- **The world popup says only what a shape can actually do**: a light source no longer
+  offers a Rotation field — a circle looks identical at every angle, and its `rotation` fed
+  `distanceTo` FOV gating, `sensorAngles`/`aimVector` (a circle has no aim), the `r` field
+  of a serialized world and the editor's rotation handle, and NOTHING drew a light rotated
+  or read it for physics. It was a control whose entire effect was a number in a file, so it
+  is gone for lights (obstacles keep theirs — a rect genuinely turns). To keep that from
+  being an untested opinion, `coop.session` now asserts a light popup has **no** `#wi-rot`
+  and takes its rotation-sync coverage from a rect wall, which still has and needs one.
+- **Sliders stay inside the popup**: the popup is 200px and the global `input[type=range]`
+  was `width:240px` — the Body-radius slider used every pixel of its label and then ran off
+  the right edge, because the label is a flex row that never clamped its child. Fixed with
+  the `min-width:0` + `flex:1 1 auto` pattern the Editor popup already used, so it holds for
+  any future slider row and any label length, and it was verified by MEASURING the slider
+  against the popup box in the browser (it was 89px wide and overflowing by 14px before).
+- **Solid light sources**: any light can be made a real object a vehicle bumps into —
+  an inspector **Solid** toggle plus a radius slider (config-bounded, default 24, and
+  contained inside the popup rather than overflowing it). A light no longer offers a
+  **Rotation** field — it is a circle, so the control was meaningless; obstacles keep
+  theirs. Off is the default, so existing worlds are untouched. Solidity adds a static body
+  and a ring drawn at *exactly* that radius; it never changes what a light sensor
+  reads (pinned by `tests/solidLightSensors.test.js`), and it does make the lamp a
+  distance-sensor target, because a physical lamp is a physical object. Switching it
+  on under a parked robot nudges it out to barrier + clearance with momentum zeroed
+  instead of letting Matter fling it, in both engines
 - Per-vehicle **body color** (fill + lightened outline) via an always-visible 4x4
   swatch palette; the editor canvas and the world render the same color
 - **"+Paths"** toggle: capped motion trails per robot, cleared on reset
@@ -229,7 +293,13 @@ Done (co-op, milestone **M5**):
   are untouchable while connected.
 - **Element sync**: the host's whole world is seeded at host time (`setElements`)
   and thereafter mirrored; element drags stream live (~30 Hz) rather than
-  teleporting on mouseup; joiners mirror immediately on welcome.
+  teleporting on mouseup; joiners mirror immediately on welcome. A light's
+  **Solid** flag rides this existing channel with no protocol change —
+  `_updateElement` shallow-merges `patch.properties` and calls `rebuildObstacles()`,
+  so the shared world's physics is the one that moved. Two contracts are load-bearing
+  and tested: the client must send an *explicit* `solid:false` to revoke it (an
+  omitted key would leave a stale `true`), and evicting bots happens on the
+  ON-transition only, never on the drag stream (that would pin them in place at 30 Hz).
 - **Host fleet management**: `#remote-fleet` lists every participant's prototype
   with a live bot count; the host gets −/+/✕ plus a typeable exact-count input
   per row (`setCount`, clamped 0–50), never edit.
@@ -255,6 +325,11 @@ Next:
   Vehicles 6/7 — keep `computeActuation` as the single seam
 - Per-actuator visual spin direction fully decoupled from force sign
 - Keyboard shortcut polish, camera collapse on play, recent-file thumbnails
+- **Light occlusion / shadow casting** — deliberately NOT done with solid lights: a
+  solid lamp blocks bodies and distance rays, but not light. A solid rock casts no
+  shadow either. Real occlusion means raycasting inside the light model against
+  `snapshot.obstacles`, which would change every existing sensor response near an
+  obstacle, so it needs its own toggle and its own discussion
 
 ## Co-op on one port (how it works)
 

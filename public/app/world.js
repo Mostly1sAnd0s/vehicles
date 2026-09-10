@@ -9,6 +9,7 @@ import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionA
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
 import { findInstanceAt, componentSize, collisionRadius } from '../src/models/hitTest.js';
 import { bumperAnchorsFor, applyBumperForces } from '../src/simulation/bumpers.js';
+import { isSolidLight, solidLightRadius, solidLightCircles, pushOutOfCircle, pushClearance } from '../src/models/solidBody.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
@@ -68,13 +69,44 @@ export class WorldSim {
     const M = this.M;
     for (const b of this.obstacleBodies) M.Composite.remove(this.engine.world, b);
     this.obstacleBodies = [];
-    for (const obs of worldElementsToSnapshot(this.worldDoc.elements).obstacles) {
+    for (const obs of worldElementsToSnapshot(this.worldDoc.elements, this.state.configs).obstacles) {
       let body;
       if (obs.type === 'circle') body = M.Bodies.circle(obs.x, obs.y, obs.radius, { isStatic: true });
       else body = M.Bodies.rectangle(obs.x, obs.y, obs.width, obs.height, { isStatic: true, angle: obs.rotation });
       this.obstacleBodies.push(body);
       M.Composite.add(this.engine.world, body);
     }
+  }
+
+  /**
+   * Push live bots out of any solid light they are now inside, and adopt the new
+   * pose as their seed. Enabling solidity under a parked robot would otherwise let
+   * Matter eject it violently across the world; instead we step it straight out to
+   * barrier + clearance along the light→bot vector with momentum zeroed (the same
+   * idiom as a bot drag-drop). Mirrors HeadlessWorld.evictOverlappingBots so the
+   * single-player and shared worlds behave identically. Returns bots moved.
+   */
+  evictOverlappingBots() {
+    const circles = solidLightCircles(this.worldDoc.elements, this.state.configs);
+    if (!circles.length) return 0;
+    const clearance = pushClearance(this.state.configs);
+    let moved = 0;
+    for (const inst of this.instances) {
+      if (!inst.body) continue;
+      const start = { x: inst.body.position.x, y: inst.body.position.y };
+      let pose = { id: inst.id, x: start.x, y: start.y };
+      for (const c of circles) {
+        const [evicted] = pushOutOfCircle(c, c.r, [pose], clearance);
+        if (evicted) pose = evicted;
+      }
+      if (Math.hypot(pose.x - start.x, pose.y - start.y) < 1e-9) continue;
+      M_BodySetPosition(this.M, inst.body, { x: pose.x, y: pose.y });
+      M.Body.setVelocity(inst.body, { x: 0, y: 0 });
+      M.Body.setAngularVelocity(inst.body, 0);
+      inst.seed = { x: pose.x, y: pose.y, rotation: inst.body.angle };
+      moved++;
+    }
+    return moved;
   }
 
   makeInstanceBody(inst) {
@@ -277,7 +309,7 @@ export class WorldSim {
     // a freshly-converted robot drives with its new config this same step).
     this.stepPropagation();
 
-    const snapshot = worldElementsToSnapshot(this.worldDoc.elements);
+    const snapshot = worldElementsToSnapshot(this.worldDoc.elements, this.state.configs);
     // Fleet poses for vehicle-detection sensors: every instance's current world
     // pose. Each sensor excludes itself by instanceId (see sampleSensors).
     snapshot.vehicles = this.instances
@@ -531,8 +563,15 @@ export class WorldSim {
   hitElement(w) {
     for (const el of this.worldDoc.elements) {
       const dx = w.x - el.position.x, dy = w.y - el.position.y;
-      let r = 12;
-      if (el.primitive === 'circle') r = (el.properties?.radius ?? 10) * (el.scale?.x ?? 1);
+      let r;
+      if (el.type === 'light') {
+        // A SOLID lamp is grabbable by its body. A soft one keeps the small handle it
+        // has always had: the glow is an order of magnitude larger than the lamp, so
+        // letting it drive the hit radius would make the whole halo grab by accident.
+        r = isSolidLight(el, this.state?.configs)
+          ? Math.max(12, solidLightRadius(el, this.state?.configs))
+          : 10;
+      } else if (el.primitive === 'circle') r = (el.properties?.radius ?? 10) * (el.scale?.x ?? 1);
       else r = Math.max(el.properties?.width ?? 20, el.properties?.height ?? 20) / 2;
       if (Math.hypot(dx, dy) <= r + 4 / this.view.zoom) return el;
     }
@@ -625,6 +664,8 @@ export class WorldSim {
     this.worldDoc.elements.push(el);
     this.selectedElement = el.id;
     this.buildObstacles();
+    // A solid lamp dropped on top of a running bot must nudge it out, not fling it.
+    if (isSolidLight(el, this.state.configs)) this.evictOverlappingBots();
     this.renderInspector();
     // Co-op (M5 p3): the host's canvas is the shared world — mirror the add out to joiners.
     this.hooks?.onElementChange?.({ op: 'add', element: el });

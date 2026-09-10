@@ -12,19 +12,23 @@ const $ = id => document.getElementById(id);
 
 async function main() {
   const load = async p => JSON.parse(await (await fetch(p)).text());
-  const [appCfg, uiCfg, components, sensors, actuators] = await Promise.all([
+  const [appCfg, uiCfg, components, sensors, actuators, worldCfg] = await Promise.all([
     load('config/app.json'),
     load('config/ui.json').catch(() => ({ keybindings: {} })),
     load('config/components.json'),
     load('config/sensors.json'),
     load('config/actuators.json'),
+    // OPTIONAL: world.json carries the solid-light defaults. Optional so a checkout whose
+    // public/config/ predates the file still boots — every read of it has a built-in
+    // fallback in src/models/solidBody.js.
+    load('config/world.json').catch(() => ({})),
   ]);
 
   // Sentinel owner for the co-op design edit slot: while it's set, editor changes land in
   // state.coopVehicle (what "Deploy design" ships) instead of a local world prototype.
   const COOP_DESIGN_MARKER = { __coopDesign: true };
   const state = {
-    configs: { app: appCfg, ui: uiCfg, components, sensors, actuators },
+    configs: { app: appCfg, ui: uiCfg, components, sensors, actuators, world: worldCfg },
     vehicle: null,
     world: null,
     coopVehicle: null, // this participant's design for the shared world (null until edited/deployed)

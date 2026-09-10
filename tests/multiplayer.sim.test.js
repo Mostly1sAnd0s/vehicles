@@ -299,3 +299,238 @@ test('M5: reset() UNDOES configuration propagation, not just poses (parity with 
   for (let i = 0; i < 3; i++) sim.step();
   assert.ok(target.vehicleOverride, 'propagation restarts from the restored mix');
 });
+
+// ---- SOLID LIGHT SOURCE in the authoritative shared world -------------------
+// The server runs the same HeadlessWorld, so solidity must be real THERE (it is the
+// physics that moves the shared bots), survive the wire as a real boolean, and be
+// revocable — an explicit `solid:false` has to actually remove the body through the
+// shallow property merge.
+
+const plainDoc = () => ({
+  body: { shape: 'rect', width: 80, height: 40, color: '#3366cc' },
+  components: [{ id: 'wR', type: 'powered_wheel', local: { x: 0, y: 12 }, localRotation: 0, props: {} }],
+  wires: [],
+});
+const lamp = (props) => ({
+  id: 'l1', type: 'light', primitive: 'circle', position: { x: 0, y: 0 },
+  rotation: 0, scale: { x: 1, y: 1 }, properties: { intensity: 200, ...props },
+});
+const staticsOf = sim => Matter.Composite.allBodies(sim.engine.world).filter(b => b.isStatic);
+
+/** Drive `inst` straight at the origin at 6px/step; report how close it got / how far it went. */
+function driveAtOrigin(sim, inst, steps = 200) {
+  let minD = Infinity, maxX = -Infinity;
+  for (let i = 0; i < steps; i++) {
+    Matter.Body.setVelocity(inst.body, { x: 6, y: 0 });
+    sim.step();
+    minD = Math.min(minD, Math.hypot(inst.body.position.x, inst.body.position.y));
+    maxX = Math.max(maxX, inst.body.position.x);
+  }
+  return { minD, maxX };
+}
+
+test('M5: a solid light becomes a static body in the shared world and stops a bot', () => {
+  const { sim } = makeWorld({ elements: [lamp({ solid: true, radius: 40 })], protos: { bot: plainDoc() } });
+  const bodies = staticsOf(sim);
+  assert.equal(bodies.length, 1, 'the solid lamp must be a static matter body');
+  assert.equal(bodies[0].circleRadius, 40, 'at the authored radius');
+  assert.ok(bodies[0].position.x === 0 && bodies[0].position.y === 0, 'centred on the lamp');
+
+  const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: -300, y: 0, rotation: 0 } });
+  const { minD } = driveAtOrigin(sim, inst);
+  // The bot is 80 wide (half-extent 40), so its CENTRE parks at ~80 from the lamp
+  // centre and can never come closer. What is being asserted is that it pressed right
+  // up against the barrier (minD just outside R + half-width) and never entered it.
+  // NOTE: maxX is deliberately NOT asserted here — an off-centre wheel torques the
+  // bot sideways and it legitimately slides AROUND the lamp, ending up past its x
+  // while never entering. Deflection is the feature working, not failing.
+  assert.ok(minD >= 40, `bot must never enter the solid lamp (minD=${minD.toFixed(1)} < R=40)`);
+  assert.ok(minD <= 100, `bot must actually reach the barrier or the test is vacuous (minD=${minD.toFixed(1)})`);
+});
+
+test('M5: the same lamp without solidity is passed straight through (control)', () => {
+  const { sim } = makeWorld({ elements: [lamp({})], protos: { bot: plainDoc() } });
+  assert.equal(staticsOf(sim).length, 0, 'a soft light contributes no body at all');
+  const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: -300, y: 0, rotation: 0 } });
+  const { minD, maxX } = driveAtOrigin(sim, inst);
+  assert.ok(minD < 20, `a soft lamp must be passable (minD=${minD.toFixed(1)})`);
+  assert.ok(maxX > 100, 'and the bot drives well past it');
+});
+
+test('M5: solidity does not change what the shared bot SENSES — only what it bumps into', () => {
+  const seek = () => ({
+    body: { shape: 'rect', width: 80, height: 40, color: '#cc3333' },
+    components: [{ id: 'sL', type: 'light_sensor', local: { x: 10, y: 0 }, localRotation: 0, props: {} }],
+    wires: [],
+  });
+  const read = (props) => {
+    // Start well clear of the lamp: a 40px lamp plus a 40px half-width body would
+    // overlap at -60, and the resulting shove would move the bot and change its
+    // reading — that would be testing the collision, not the sensing.
+    const { sim } = makeWorld({ elements: [lamp(props)], protos: { bot: seek() } });
+    sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: -200, y: 0, rotation: 0 } });
+    sim.step();
+    const s = sim.snapshot().bots[0].samples[0];
+    return { value: s.value, lightLevel: s.lightLevel, effectiveRange: s.effectiveRange, samplePoint: s.samplePoint };
+  };
+  const soft = read({});
+  const hard = read({ solid: true, radius: 40 });
+  assert.deepEqual(hard, soft, 'identical sensor readout (value, level, beam length, sample point) with the lamp solid vs not');
+});
+
+test('M5: updateElement solid:true builds the body and broadcasts a real boolean', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [lamp({})], vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  const seen = [];
+  session.bind(p.token, m => seen.push(m));
+
+  assert.equal(staticsOf(session.world).length, 0);
+  const res = session.handle(p.token, { type: 'updateElement', id: 'l1', patch: { properties: { solid: true, radius: 50 } } });
+  assert.equal(res.type, 'elementUpdated');
+
+  const bodies = staticsOf(session.world);
+  assert.equal(bodies.length, 1, 'solid ON must create the shared body');
+  assert.equal(bodies[0].circleRadius, 50);
+
+  const bcast = seen.filter(m => m.type === 'elements').pop();
+  assert.ok(bcast, 'the edit must broadcast the element list');
+  const wire = JSON.parse(JSON.stringify(bcast)); // exactly what goes over the socket
+  assert.equal(wire.elements[0].properties.solid, true, 'the wire must carry a real boolean, not a string');
+  assert.equal(wire.elements[0].properties.radius, 50);
+  assert.equal(wire.elements[0].properties.intensity, 200, 'the merge must not drop the other properties');
+});
+
+test('M5: updateElement solid:false REALLY removes the body (shallow-merge honours an explicit false)', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [lamp({ solid: true, radius: 50 })], vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  const seen = [];
+  session.bind(p.token, m => seen.push(m));
+  assert.equal(staticsOf(session.world).length, 1, 'starts solid');
+
+  session.handle(p.token, { type: 'updateElement', id: 'l1', patch: { properties: { solid: false } } });
+  assert.equal(staticsOf(session.world).length, 0, 'an explicit false must remove the body');
+  const wire = JSON.parse(JSON.stringify(seen.filter(m => m.type === 'elements').pop()));
+  assert.equal(wire.elements[0].properties.solid, false, 'and broadcast the false, not a stale true');
+  assert.equal(wire.elements[0].properties.radius, 50, 'radius is left alone (only what was sent is merged)');
+});
+
+test('M5: a participant cannot make the shared lamp solid', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [lamp({})], vehiclePrototypes: [] } });
+  const admin = session.join({ name: 'host', role: 'admin' });
+  const guest = session.join({ name: 'guest', role: 'participant' });
+  session.bind(guest.token, () => {});
+  const res = session.handle(guest.token, { type: 'updateElement', id: 'l1', patch: { properties: { solid: true, radius: 40 } } });
+  assert.equal(res.type, 'error', 'non-admin edits are refused');
+  assert.equal(staticsOf(session.world).length, 0, 'and nothing was built');
+  assert.equal(session.participants.get(guest.token).role, 'participant');
+  assert.equal(session.participants.get(admin.token).role, 'admin', 'exactly one admin — the guest cannot have become one');
+});
+
+test('M5: a solid lamp seeded by setElements is live for bots that deploy afterwards', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [], vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  session.bind(p.token, () => {});
+  session.handle(p.token, { type: 'setElements', elements: [lamp({ solid: true, radius: 40 })] });
+  assert.equal(staticsOf(session.world).length, 1, 'setElements must build the solid body too');
+  session.handle(p.token, { type: 'deploy', vehicle: plainDoc() });
+  const inst = session.world.instances[0];
+  Matter.Body.setPosition(inst.body, { x: -300, y: 0 });
+  const { minD } = driveAtOrigin(session.world, inst, 200);
+  assert.ok(minD >= 40 && minD <= 100,
+    `a late-deployed bot must still be stopped at the barrier (minD=${minD.toFixed(1)}, expected 40..100)`);
+});
+
+test('M5: addElement carrying solidity builds the body (the host adds a solid lamp after the fact)', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [], vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  session.bind(p.token, () => {});
+  session.handle(p.token, { type: 'addElement', element: { id: 'l2', type: 'light', primitive: 'circle', position: { x: 120, y: 0 }, properties: { intensity: 300, solid: true, radius: 33 } } });
+  const bodies = staticsOf(session.world);
+  assert.equal(bodies.length, 1, 'the added solid lamp must be a body');
+  assert.equal(bodies[0].circleRadius, 33);
+  assert.equal(bodies[0].position.x, 120);
+});
+
+// ---- eviction: turning a lamp solid ON TOP of a bot must nudge, not fling --
+
+test('M5: evictOverlappingBots pushes a parked bot out to barrier + clearance, momentum zeroed', () => {
+  const { sim } = makeWorld({ elements: [lamp({ solid: true, radius: 40 })], protos: { bot: plainDoc() } });
+  const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: 10, y: 0, rotation: 0 } });
+  Matter.Body.setVelocity(inst.body, { x: 5, y: -3 });
+  Matter.Body.setAngularVelocity(inst.body, 0.4);
+
+  const moved = sim.evictOverlappingBots();
+  assert.equal(moved, 1, 'the overlapping bot is evicted');
+  const d = Math.hypot(inst.body.position.x, inst.body.position.y);
+  assert.ok(d >= 46 - 1e-6, `bot must land at least at barrier+clearance (d=${d})`);
+  assert.ok(d <= 46 + 1e-6, `and not further than it had to (d=${d})`);
+  assert.ok(inst.body.velocity.x === 0 && inst.body.velocity.y === 0, 'linear momentum zeroed (no fling)');
+  assert.equal(inst.body.angularVelocity, 0, 'angular momentum zeroed');
+  assert.ok(Math.abs(inst.seed.x - inst.body.position.x) < 1e-6 && Math.abs(inst.seed.y - inst.body.position.y) < 1e-6,
+    'the evicted pose becomes the seed, so a Reset cannot shove it back inside');
+});
+
+test('M5: eviction leaves a bot that is already clear completely alone', () => {
+  const { sim } = makeWorld({ elements: [lamp({ solid: true, radius: 40 })], protos: { bot: plainDoc() } });
+  const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: -300, y: 0, rotation: 0 } });
+  Matter.Body.setVelocity(inst.body, { x: 4, y: 0 });
+  assert.equal(sim.evictOverlappingBots(), 0, 'nothing to evict');
+  assert.equal(inst.body.position.x, -300, 'untouched');
+  assert.equal(inst.body.velocity.x, 4, 'and still moving');
+});
+
+test('M5: a non-solid lamp evicts nothing (the default world is inert)', () => {
+  const { sim } = makeWorld({ elements: [lamp({})], protos: { bot: plainDoc() } });
+  const inst = sim.addInstance({ id: 'bot#1', protoId: 'bot', seed: { x: 0, y: 0, rotation: 0 } });
+  assert.equal(sim.evictOverlappingBots(), 0, 'a soft lamp has no barrier to be evicted from');
+  assert.equal(inst.body.position.x, 0);
+});
+
+test('M5: Session updateElement solid:true evicts; an intensity-only patch does not', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [lamp({})], vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  session.bind(p.token, () => {});
+  session.handle(p.token, { type: 'deploy', vehicle: plainDoc() });
+  const inst = session.world.instances[0];
+  Matter.Body.setPosition(inst.body, { x: 5, y: 0 });
+  Matter.Body.setVelocity(inst.body, { x: 2, y: 0 });
+
+  // An intensity tweak must NOT touch the bot.
+  session.handle(p.token, { type: 'updateElement', id: 'l1', patch: { properties: { intensity: 999 } } });
+  assert.equal(inst.body.position.x, 5, 'an intensity edit must not move a bot');
+
+  // Turning it solid must.
+  session.handle(p.token, { type: 'updateElement', id: 'l1', patch: { properties: { solid: true, radius: 40 } } });
+  const d = Math.hypot(inst.body.position.x, inst.body.position.y);
+  assert.ok(d >= 40, `the bot must be outside the new barrier (d=${d})`);
+  assert.ok(inst.body.velocity.x === 0 && inst.body.velocity.y === 0, 'and must not be flung');
+});
+
+test('M5: Session addElement / setElements carrying a solid lamp evict too', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [], vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  session.bind(p.token, () => {});
+  session.handle(p.token, { type: 'deploy', vehicle: plainDoc() });
+  const inst = session.world.instances[0];
+
+  Matter.Body.setPosition(inst.body, { x: 120, y: 0 });
+  session.handle(p.token, { type: 'addElement', element: { id: 'l2', type: 'light', primitive: 'circle', position: { x: 120, y: 0 }, properties: { intensity: 10, solid: true, radius: 30 } } });
+  assert.ok(Math.hypot(inst.body.position.x - 120, inst.body.position.y) >= 30, 'addElement must evict a bot it dropped a lamp on');
+
+  Matter.Body.setPosition(inst.body, { x: 0, y: 0 });
+  session.handle(p.token, { type: 'setElements', elements: [{ id: 'l3', type: 'light', primitive: 'circle', position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1 }, properties: { intensity: 10, solid: true, radius: 25 } }] });
+  assert.ok(Math.hypot(inst.body.position.x, inst.body.position.y) >= 25, 'setElements must evict too');
+});
+
+test('M5: dragging a solid lamp (moveElement) does NOT evict — it must not pin bots at 30Hz', () => {
+  const session = new Session({ Matter, configs, worldDoc: { elements: [lamp({ solid: true, radius: 40 })], vehiclePrototypes: [] } });
+  const p = session.join({ name: 'host', role: 'admin' });
+  session.bind(p.token, () => {});
+  session.handle(p.token, { type: 'deploy', vehicle: plainDoc() });
+  const inst = session.world.instances[0];
+  Matter.Body.setPosition(inst.body, { x: 5, y: 0 });
+  Matter.Body.setVelocity(inst.body, { x: 3, y: 0 });
+  session.handle(p.token, { type: 'moveElement', id: 'l1', x: 200, y: 0 });
+  assert.equal(inst.body.position.x, 5, 'a drag must not teleport a bot');
+  assert.equal(inst.body.velocity.x, 3, 'nor kill its momentum');
+});

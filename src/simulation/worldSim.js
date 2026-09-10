@@ -15,6 +15,7 @@ import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionA
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from './logic.js';
 import { collisionRadius } from '../models/hitTest.js';
 import { bumperAnchorsFor, applyBumperForces } from './bumpers.js';
+import { solidLightCircles, pushOutOfCircle, pushClearance } from '../models/solidBody.js';
 
 const clone = v => JSON.parse(JSON.stringify(v));
 const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -61,7 +62,7 @@ export class HeadlessWorld {
     const M = this.M;
     for (const b of this.obstacleBodies) M.Composite.remove(this.engine.world, b);
     this.obstacleBodies = [];
-    const obs = worldElementsToSnapshot(this.worldDoc.elements ?? {}).obstacles ?? [];
+    const obs = worldElementsToSnapshot(this.worldDoc.elements ?? {}, this.configs).obstacles ?? [];
     for (const o of obs) {
       const body = o.type === 'circle'
         ? M.Bodies.circle(o.x, o.y, o.radius, { isStatic: true })
@@ -77,6 +78,44 @@ export class HeadlessWorld {
    * this, rocks/walls would never become physics bodies and deployed bots would pass through them.
    */
   rebuildObstacles() { this._buildObstacles(); }
+
+  /**
+   * Push live bots out of any solid light they are now inside, and adopt the new
+   * pose as their seed.
+   *
+   * Why: Matter resolves an interpenetration by ejecting the intruder hard. If a
+   * host ticks "solid" while one of their bots is parked on the lamp — or drops a
+   * solid lamp on top of one — every bot inside gets flung across the world. We
+   * instead step each one straight out to barrier + clearance along the light→bot
+   * vector and zero its momentum, the same idiom as a bot drag-drop. Seeding the
+   * evicted pose means a later Reset does not shove it back inside.
+   *
+   * Called on the solidity ON-transition only (update/add/set elements), never from
+   * the ~30Hz drag stream — evicting every move would pin bots in place.
+   * Returns the number of bots moved.
+   */
+  evictOverlappingBots() {
+    const circles = solidLightCircles(this.worldDoc.elements ?? {}, this.configs);
+    if (!circles.length) return 0;
+    const clearance = pushClearance(this.configs);
+    let moved = 0;
+    for (const inst of this.instances) {
+      if (!inst.body) continue;
+      const start = { x: inst.body.position.x, y: inst.body.position.y };
+      let pose = { id: inst.id, x: start.x, y: start.y };
+      for (const c of circles) {
+        const [evicted] = pushOutOfCircle(c, c.r, [pose], clearance);
+        if (evicted) pose = evicted;
+      }
+      if (Math.hypot(pose.x - start.x, pose.y - start.y) < 1e-9) continue;
+      M_BodySetPosition(this.M, inst.body, { x: pose.x, y: pose.y });
+      this.M.Body.setVelocity(inst.body, { x: 0, y: 0 });
+      this.M.Body.setAngularVelocity(inst.body, 0);
+      inst.seed = { x: pose.x, y: pose.y, rotation: inst.body.angle };
+      moved++;
+    }
+    return moved;
+  }
 
   _makeBody(v) {
     const M = this.M;
@@ -281,7 +320,7 @@ export class HeadlessWorld {
     if (bumperEntries.some(e => e.bumpers.length)) applyBumperForces(M, bumperEntries);
     this._stepPropagation();
 
-    const snapshot = worldElementsToSnapshot(this.worldDoc.elements ?? {});
+    const snapshot = worldElementsToSnapshot(this.worldDoc.elements ?? {}, this.configs);
     snapshot.vehicles = this.instances.filter(i => i.body).map(i => ({ id: i.id, x: i.body.position.x, y: i.body.position.y, angle: i.body.angle }));
     const thrustScale = this.configs.app.defaults.thrustScale ?? 0.25;
     const actCfg = this.configs.actuators.powered_wheel;

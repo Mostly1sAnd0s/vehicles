@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "light": {
+    "solid": false,
+    "radius": 24,
+    "minRadius": 8,
+    "maxRadius": 240,
+    "pushClearance": 6
+  }
+}

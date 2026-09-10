@@ -4,6 +4,7 @@
  */
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { componentSize } from '../src/models/hitTest.js';
+import { isSolidLight, solidLightRadius } from '../src/models/solidBody.js';
 import { hexToRgba, lightenHex, DEFAULT_BODY_COLOR } from './color.js';
 
 export function drawWorld(sim) {
@@ -21,7 +22,7 @@ export function drawWorld(sim) {
     ctx.scale(sim.view.zoom, sim.view.zoom);
     ctx.translate(-sim.view.x, -sim.view.y);
 
-    const snap = worldElementsToSnapshot(sim.worldDoc.elements);
+    const snap = worldElementsToSnapshot(sim.worldDoc.elements, sim.state?.configs);
 
     // lights: radial glow
     for (const l of snap.lights) {
@@ -38,6 +39,32 @@ export function drawWorld(sim) {
       ctx.beginPath();
       ctx.arc(l.x, l.y, r * 0.5, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    // SOLID lights: a real object a vehicle can bump into. Drawn after the glow so
+    // the ring is not washed out, and at `solidLightRadius()` — the SAME pure
+    // function the snapshot handed the physics engine — so the ring IS the barrier
+    // and the two can never drift apart. Same idiom as a Bumper: an outline ring
+    // reads as a barrier rather than a solid mount. Not gated by the Beams toggle:
+    // the barrier is there whether the sim is running or paused.
+    for (const el of sim.worldDoc.elements ?? []) {
+      if (!isSolidLight(el, sim.state?.configs)) continue;
+      const R = solidLightRadius(el, sim.state?.configs);
+      const x = el.position.x, y = el.position.y;
+      ctx.beginPath();
+      ctx.arc(x, y, R, 0, Math.PI * 2);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,236,190,0.95)';
+      ctx.stroke();
+      // dashed halo just outside: reads as "solid" and separates a lamp-body ring
+      // from a rock's silhouette at a glance
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.arc(x, y, R + 3.5, 0, Math.PI * 2);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(150,180,220,0.55)';
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     // obstacles

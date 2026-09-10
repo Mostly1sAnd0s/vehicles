@@ -105,14 +105,17 @@ const server = http.createServer(async (req, res) => {
 });
 
 // The shared world, attached to the same server (same port as the SPA).
-const [appCfg, components, sensors, actuators] = await Promise.all(
-  ['app', 'components', 'sensors', 'actuators'].map((f) =>
-    readFile(path.join(APP, 'config', `${f}.json`), 'utf8').then((t) => JSON.parse(t))),
-);
+const readCfg = (f) => readFile(path.join(APP, 'config', `${f}.json`), 'utf8').then((t) => JSON.parse(t));
+const [appCfg, components, sensors, actuators, worldCfg] = await Promise.all([
+  readCfg('app'), readCfg('components'), readCfg('sensors'), readCfg('actuators'),
+  // OPTIONAL: a public/config/ predating config/world.json must not stop the server.
+  // Every read of it falls back to the built-ins in src/models/solidBody.js.
+  readCfg('world').catch(() => ({})),
+]);
 const gw = coopEnabled
   ? createCoopGateway({
     Matter,
-    configs: { app: appCfg, components, sensors, actuators },
+    configs: { app: appCfg, components, sensors, actuators, world: worldCfg },
     server, // ← the merge: no second listener
     onStepError: (err, code, label) => console.error(`[coop] world ${code} ${label} failed:`, err?.message ?? err),
   })

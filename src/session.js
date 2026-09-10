@@ -15,6 +15,7 @@
  *   - **setCount** and **controls** (start/pause/reset) are admin-only.
  */
 import { HeadlessWorld } from './simulation/worldSim.js';
+import { isSolidLight } from './models/solidBody.js';
 
 const DEFAULT_COUNT = 1; // clones a participant gets on their first deploy
 
@@ -214,6 +215,9 @@ export class Session {
     };
     this._sharedElements().push(el);
     this.world.rebuildObstacles();
+    // A solid lamp added on top of a running bot would otherwise fling it (see
+    // HeadlessWorld.evictOverlappingBots). Only the ON-transition evicts.
+    if (isSolidLight(el, this.world.configs)) this.world.evictOverlappingBots();
     const res = { type: 'elementAdded', id: el.id, count: this._sharedElements().length };
     this._sendTo(p.token, res); // ack so the host learns the assigned id (handle() only echoes errors)
     this.broadcast({ type: 'elements', elements: this._elementsWire() }); // everyone (incl. sender; admin UI ignores its own echo)
@@ -268,6 +272,9 @@ export class Session {
       el.properties = { ...el.properties, ...patch.properties };
     }
     this.world.rebuildObstacles();
+    // Evict only when solidity itself changed — the property patch may have been
+    // an intensity tweak, and evicting on every edit would freeze bots in place.
+    if ('solid' in (msg?.patch?.properties ?? {})) this.world.evictOverlappingBots();
     const res = { type: 'elementUpdated', id: el.id };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });
@@ -290,6 +297,7 @@ export class Session {
     if (bad >= 0) return { type: 'error', error: `setElements: element ${bad} needs a type and a finite position` };
     this.world.worldDoc.elements = structuredClone(els);
     this.world.rebuildObstacles();
+    if (els.some(e => isSolidLight(e, this.world.configs))) this.world.evictOverlappingBots();
     const res = { type: 'elementsSet', count: els.length };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });

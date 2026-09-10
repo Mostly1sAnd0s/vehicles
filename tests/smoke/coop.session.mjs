@@ -223,18 +223,40 @@ try {
   // ---------- BUG 12 (this fix): inspector EDITS sync (intensity/rot/…), not just drags ---
   // X/Y/Rot/Scale/Intensity/Radius/W/H were bound locally and never streamed, so the shared
   // world's physics and every joiner kept the OLD values while only canvas drags synced.
+  // A light is a CIRCLE and no longer offers a Rotation control (it used to set a value
+  // nothing could ever see), so this check edits intensity on the light and takes its
+  // ROTATION coverage from a rect wall — an element that still has, and needs, one.
+  // Asserting the light has NO #wi-rot keeps that UI decision pinned in the co-op probe.
   const editLightId = await H.ev(`window.__app().state.world.elements.find(e=>e.type==='light').id`);
-  await H.ev(`(()=>{const app=window.__app();app.worldSim.selectedElement='${editLightId}';app.worldSim.renderInspector();const i=document.getElementById('wi-int');if(!i)throw new Error('no wi-int on the light popup');i.value='9876';i.dispatchEvent(new Event('change',{bubbles:true}));const r=document.getElementById('wi-rot');r.value='45';r.dispatchEvent(new Event('change',{bubbles:true}));return 1})()`);
+  await H.ev(`(()=>{const app=window.__app();app.worldSim.selectedElement='${editLightId}';app.worldSim.renderInspector();const i=document.getElementById('wi-int');if(!i)throw new Error('no wi-int on the light popup');if(document.getElementById('wi-rot'))throw new Error('a light must not expose a Rotation control');i.value='9876';i.dispatchEvent(new Event('change',{bubbles:true}));return 1})()`);
   let synced12 = false, seen12 = null;
   for (let i = 0; i < 60 && !synced12; i++) {
-    seen12 = await J.ev(`(()=>{const e=window.__app().state.world.elements.find(e=>e.id==='${editLightId}');return JSON.stringify(e?{int:e.properties.intensity,rot:e.rotation}:null)})()`);
+    seen12 = await J.ev(`(()=>{const e=window.__app().state.world.elements.find(e=>e.id==='${editLightId}');return JSON.stringify(e?{int:e.properties.intensity}:null)})()`);
     const v = JSON.parse(seen12);
-    synced12 = v && v.int === 9876 && Math.abs(v.rot - Math.PI / 4) < 1e-6;
+    synced12 = v && v.int === 9876;
     if (!synced12) await sleep(100);
   }
-  if (!synced12) fail('BUG12: inspector intensity/rot edits did not mirror to the joiner: ' + seen12);
+  if (!synced12) fail('BUG12: inspector intensity edit did not mirror to the joiner: ' + seen12);
   const srv12 = gw.worlds.get(code).session.world.worldDoc.elements.find(e => e.id === editLightId);
   if (!(srv12 && srv12.properties.intensity === 9876)) fail('BUG12: server world kept the old intensity (the authoritative sim senses what the server holds): ' + JSON.stringify(srv12?.properties));
+
+  // --- rotation sync, proven on a rect wall (the element type that still has the control) ---
+  const wallId = 'bug12-wall';
+  await H.ev(`(()=>{const app=window.__app();app.worldSim.addElement({id:'${wallId}',type:'obstacle',primitive:'rect',position:{x:0,y:-300},rotation:0,scale:{x:1,y:1},properties:{width:160,height:20}},{x:0,y:-300});return 1})()`);
+  await H.ev(`(()=>{const app=window.__app();app.worldSim.selectedElement='${wallId}';app.worldSim.renderInspector();const r=document.getElementById('wi-rot');if(!r)throw new Error('no wi-rot on the obstacle popup — rotation sync coverage would be lost');r.value='45';r.dispatchEvent(new Event('change',{bubbles:true}));return 1})()`);
+  let synced12r = false, seen12r = null;
+  for (let i = 0; i < 60 && !synced12r; i++) {
+    seen12r = await J.ev(`(()=>{const e=window.__app().state.world.elements.find(e=>e.id==='${wallId}');return JSON.stringify(e?{rot:e.rotation}:null)})()`);
+    const v = JSON.parse(seen12r);
+    synced12r = v && Math.abs(v.rot - Math.PI / 4) < 1e-6;
+    if (!synced12r) await sleep(100);
+  }
+  if (!synced12r) fail('BUG12: inspector rotation edit on an obstacle did not mirror to the joiner: ' + seen12r);
+  const srv12r = gw.worlds.get(code).session.world.worldDoc.elements.find(e => e.id === wallId);
+  if (!(srv12r && Math.abs(srv12r.rotation - Math.PI / 4) < 1e-6)) fail('BUG12: server world kept the old rotation: ' + JSON.stringify(srv12r));
+  // Take the wall back out so later phases see the world they were written against.
+  await H.ev(`(()=>{const app=window.__app();app.worldSim.worldDoc.elements=app.worldSim.worldDoc.elements.filter(e=>e.id!=='${wallId}');app.worldSim.selectedElement=null;app.worldSim.buildObstacles();app.worldSim.renderInspector();return 1})()`);
+  await H.ev(`window.__app().coopPanel.client.removeElement('${wallId}')`);
 
   // ---------- BUG 10a: the JOINER's world is locked — its drag must move nothing --------
   // Elements are host-controlled: a participant may select one for the read-only popup but

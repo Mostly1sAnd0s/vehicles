@@ -22,7 +22,8 @@ The system is client-side only with manual JSON import/export for sharing. No se
 * Wiring remains editable after vehicle creation
 * World simulation with full 2D physics, primitive obstacles and light sources
 * Realistic sensors: inverse-square light falloff, raycast distance/proximity with toggleable beam visualization
-* World elements editable in World view: position, rotation, scale
+* World elements editable in World view: position, rotation, scale *(and, as of M8,
+  a light's solidity + collision radius)*
 * World and vehicle save/load as JSON
 * Vehicle instances list with prototype editing propagation. Instance count controlled via slider/integer
 * Responsive world view that expands to browser window
@@ -55,7 +56,10 @@ No hard-coded variables. All tunable parameters live in JSON config files, each 
 * `config/sensors.json` - Sensor types, falloff models, raycast params, beam visualization options
 * `config/actuators.json` - Actuator types, force limits, power curves
 * `config/world.json` - Default world settings, obstacle primitives, light defaults
-  *(never shipped — worlds are sample JSON documents under `public/worlds/`, not a config)*
+  *(shipped in part as of M8: the solid-light defaults + bounds. Worlds themselves
+  remain sample JSON documents under `public/worlds/`, not a config. Treated as
+  OPTIONAL by all three loaders, with built-in fallbacks in `src/models/solidBody.js`,
+  so a checkout whose `public/config/` predates the file still boots)*
 * `config/ui.json` - UI layout, tab defaults, snap point density
 
 Config files are loaded at startup *(hot-reload was planned but never implemented; a reload
@@ -1007,3 +1011,149 @@ tests and smoke assertions), docs corrected, and dead code removed.
   BUG12 (inspector intensity/rot edits → server + joiner mirrored).
 - Traversal fix verified directly: the encoded sibling-prefix escape
   (`/..%2fpublic-backup%2fx.json`) is now 403 (the old check served it).
+
+## M8 — Solid light sources
+
+Braitenberg's stock situations often put the light in the world as a thing a vehicle
+can bump into, circle, or press against; lights were pure field emitters, so every such
+demo drove straight through the sun. This adds a **Solid** toggle plus a radius slider to
+the light's world inspector. Plan and rationale: `docs/solid-light-plan.md`.
+
+### As built
+* **Data**: `properties.solid` (boolean, default `false`) + `properties.radius`
+  (default 24, config-bounded 8–240, scaled by `el.scale.x`). `radius` — not
+  `solidRadius` — so a light reads the same circle vocabulary as a `rock` and no
+  consumer has to special-case it. A light with no `properties` object at all
+  (hand-written JSON) is hardened, not fatal.
+* **The seam** is `worldElementsToSnapshot(elements, configs)`, which both
+  `WorldSim.buildObstacles()` and `HeadlessWorld._buildObstacles()` already call: a
+  solid light emits its emitter entry **and** a rock-identical `circle` obstacle. That
+  one change lands in the browser, the authoritative co-op world, and the raycaster —
+  zero edits to either body builder, either step loop, or the wire protocol.
+* **The invariant that makes it safe**: solidity NEVER changes what a light sensor
+  reads. Sensors read `snapshot.lights`; the body goes in `snapshot.obstacles`.
+  Pinned across a sweep of distances, through `evaluateVehicleSensors`, and in the
+  shared world. What it *does* change is that the lamp becomes a distance-sensor
+  target — intended, because a physical lamp is a physical object.
+* **Ring === barrier**, the rule the Bumper fix (`bf02a21`) established: the renderer
+  draws at `solidLightRadius()`, the same pure function the snapshot handed physics.
+* **Co-op needed no protocol change.** `Session._updateElement` already shallow-merges
+  `patch.properties` and calls `rebuildObstacles()`. Two contracts are load-bearing
+  and now tested: the client sends an **explicit** `solid:false` to revoke it (an
+  omitted key would merge-clean and leave a stale `true`), and eviction runs on the
+  ON-transition only — never from the ~30 Hz `moveElement` stream, which would pin
+  every bot under the drag.
+* **Eviction** (`evictOverlappingBots`, mirrored in both engines): Matter resolves an
+  interpenetration by ejecting the intruder, so ticking Solid on top of a parked robot
+  flings it. Each overlapping bot is stepped out to barrier + clearance along the
+  light→bot vector with momentum zeroed, and the evicted pose becomes its seed so a
+  Reset cannot shove it back in.
+
+### Deviations from the plan (each caught by a test or by measurement)
+* **`authoredLightRadius` added.** The slider must bind to the *unscaled* radius; a
+  slider bound to the scaled value multiplies by `el.scale` again on every edit and the
+  barrier creeps.
+* **Number coercion tightened.** A test asserted a `[]` radius falls back to the
+  default and failed, because `Number([]) === 0`: the old helper silently turned a
+  wrong type into a zero-size barrier. Only real numbers and non-empty numeric strings
+  are accepted now.
+* **`restitution` dropped** from `config/world.json`. Wiring it would have meant either
+  a non-rock-shaped obstacle (breaking the "nothing downstream can tell them apart"
+  property) or changing existing rock behaviour; Matter's default reads fine.
+* **A dedicated probe** (`tests/smoke/world.solidlight.mjs`, web 8935 / CDP 9248,
+  `npm run smoke:solid`) rather than extending `world.sim.mjs`, which already fails
+  before its late phases in this environment.
+* **Unique Chrome profile per probe run.** A reused profile plus `python3 -m
+  http.server` (no `Cache-Control`) let Chrome's heuristic cache serve a
+  pre-edit `light-field.json`; the app edited a stale document and the probe asserted
+  against files that were not the ones on disk. Cost: ~200 ms.
+
+### The two UI fixes from review
+* **Radius slider escaped the popup.** The cause was found by measuring, not guessing —
+  the first theory (a flex item's ~129px *automatic minimum size*) was wrong and was
+  disproved by reading the computed style: a global `input[type=range] { width:240px }`
+  rule sat in the stylesheet, and `#world-inspector` is only 200px wide. A 240px child in
+  a `display:flex` label that never clamps its children (no `min-width:0`) overflows the
+  200px box — and since the popup is pinned to `right:10px`, it ran off the screen. Fixed
+  with `flex:1 1 auto; min-width:0; width:auto` on `#world-inspector input[type=range]`,
+  which is the rule the editor inspector already relied on (`#editor-inspector` sets
+  `min-width:0` on its labels) — so the two popups now behave identically and any future
+  slider row is safe. Measured before: 89px wide, `right` edge 254px against a 240px box
+  (14px past it, the last ~40px unreadable). Measured after: contained.
+* **A light no longer shows Rotation.** Not because the field was dead — it was NOT, and
+  the honest reason is narrower: it wrote `el.rotation`, which is read by the
+  `distanceTo` FOV gate, by `sensorAngles`/`aimVector`, by the serialized `r` field and by
+  the editor's rotation handle. But a light is a CIRCLE drawn by `arc()`, so no consumer
+  can produce an observable difference — every angle is the same shape. The control was
+  therefore a knob whose only output was a number in a file, and it is gone for lights.
+  Obstacles keep theirs, where rotation is real for a rect (and for polygon primitives on
+  the horizon). The light's own `el.rotation` value is left untouched — only the control
+  is hidden — so nothing that already stored a rotation loses it.
+  Removing it then surfaced a genuine regression: `coop.session`'s BUG12 drove `#wi-rot` on
+  a LIGHT to prove rotation mirrored to the joiner, and threw on the null input. Fixed by
+  moving that coverage to a rect wall (which has, and needs, the field), asserting the
+  light popup has NO `#wi-rot`, and leaving the intensity-sync check on the light.
+
+### ⚠ Process note: this work was built on a stale base
+The review round reported "the Bumper is broken — it says same-prototype clones pass
+through, and my Density slider is gone". Neither was a regression from this feature:
+**this workspace was one commit behind.** Local `origin/main` still read `bf02a21`
+because nothing had fetched, while the real remote (and the user's other machine) was on
+`d36ab99` — the hollow-ring force-field Bumper with the Density slider and the corrected
+tip. Symptoms of a stale base look exactly like self-inflicted breakage, because the
+file you are reading IS the old one.
+
+Recovery, in the order that is safe (all of it recoverable at every step, and nothing
+committed without the user's go-ahead):
+1. `git fetch origin` — the ONLY step that tells the truth about the remote.
+2. Back the work up OUTSIDE git (`git diff > /tmp/…patch` + `tar` the untracked files),
+   because a stash can be dropped and a botched pop is easier to fix from a file.
+3. `git stash push -u` → `git merge --ff-only origin/main` (main had no commits of its
+   own, so it fast-forwards rather than merges) → `git stash pop`.
+4. Resolve. Here: 3 files, and 2 were *pure import-line collisions* (both sides added
+   an import at the same place) — keep both, don't think too hard about those.
+5. Re-run everything, and confirm BOTH features survived, not just yours.
+
+Test count is the tell: base went 262 → 283 (upstream's 21 bumper tests), and with the
+55 solid-light tests the merged tree must be 338. Anything else means a side got lost.
+
+### Verified (on a clean environment — the first pass at this was not, see below)
+* Unit **338/338** (`npm test`) on the rebased tree = 283 upstream (incl.
+  `tests/bumper.test.js`) + 55 new here across `solidBody`, `solidLightSensors`,
+  `worldSnapshot`, `multiplayer.sim`.
+* `smoke:solid` 12/12 in headless Chromium: controls emitted · toggle builds a static
+  body and reveals the slider · ring === barrier exactly · slider drives the body live
+  and clamps · a driven robot is stopped · the same robot passes straight through with
+  solidity off (the control run) · property-less import · eviction with momentum
+  zeroed and seed adopted · slider contained inside the popup · light has no Rotation
+  field while obstacles keep theirs · Bumper is the force-field build (Radius + Density
+  sliders present, corrected tip, stale "clones pass through" copy gone).
+  The containment and Bumper checks are checkout-correctness guards: they fail loudly on
+  a tree that predates `d36ab99` instead of quietly testing the wrong code.
+* No regressions: `editor.ui`, `neurons.outputs`, `world.tabs`, `coop.panel` and
+  `merged.serve` all green, plus the standalone `serve:coop` gateway booting with the new
+  config file.
+* The three probes that do NOT pass here fail at **exactly the phase clean HEAD fails at**,
+  measured on a throwaway worktree at `d36ab99` rather than assumed:
+  | probe | this tree | clean HEAD |
+  |---|---|---|
+  | `coop.session` | `BUG6: joiner not restored to home world: ["light"]` | same |
+  | `world.sim` | `vehicle detection: need two instances` | same |
+  | `proto.crud` | `add: expected >=6 live instances (3+3), got 4` | same |
+  Getting to "the same failure" rather than "a new failure" is the actual bar for a change
+  to a suite that already has red in it.
+
+### The verification itself had to be redone
+An earlier pass of this table was **wrong in both directions** — it reported green for a
+phase that was really broken and red for one that was fine — because of the two harness
+hazards documented in the README: a probe attached to a still-live Chrome bound to its
+fixed CDP port (a page loaded from a different checkout), and a per-run `rm -rf` of the
+Chrome profile racing a dying Chrome that re-created the profile and its HTTP cache.
+Both were caught the same way: by asserting a fact two ways at once (the served module
+source vs the DOM it had produced) inside a single `Runtime.evaluate`, where a stale page
+cannot fake both. Symptoms, if you meet them again: a probe insisting on code you can see
+is not in the file, or `PASS` from a probe run while its server is answering from another
+directory. Check `curl http://127.0.0.1:<cdp>/json` and who owns the web port before
+believing either result. `smoke:solid` now frees its CDP port and verifies a `?nc=` nonce
+on the page it attaches to; the other probes still rely on a fixed profile+port and could
+use the same treatment.
