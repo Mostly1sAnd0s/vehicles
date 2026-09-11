@@ -1366,3 +1366,48 @@ one protocol, two transports.**
    cap + incremental delivery, detail gating. `tests/simMirror.test.js` — reply application.
 3. world.js rewire guarded by the full unit suite + smoke probes; `world.sim`, `proto.crud`,
    `world.solidlight`, `world.heatsource` on `?worker=0`; new `smoke:worker` for the Worker.
+
+### M10 as built (session 2) — status, deviations, and what still needs a real browser
+
+**Shipped:** M10.1 (grid) and M10.2 (protocol/worker/bridge) as designed above. Measured
+`HeadlessWorld.step()` @ 1000 vehicles with one detection sensor each: **20.7 ms → 7.9 ms**
+(`scripts/bench-fleet.mjs`, grid on/off A/B). The detection layer itself went from ~60M
+distance checks/s to a few hundred thousand. Unit suite: 478/478.
+
+Deviations from the plan, each forced by the design itself:
+* **Recording Paths only while the toggle is on** (was: always record, hidden). The transport
+  cannot hand the page history retroactively, and recording unconditionally for a renderer
+  that is off is exactly the hidden work M10 is about. Toggle-on starts a fresh trail.
+* **`sync` is full-desired-state, diffed engine-side** (elements + prototype docs + instance
+  seeds), so every page-side structural change re-states the world idempotently. Seeds are
+  page-owned; `sync` refreshes engine seeds WITHOUT moving live bodies, and `reset` can carry
+  seeds (arrange-then-reset is one round trip). This is why `ensureCount`/`move`/`reset` have
+  identical semantics on both transports.
+* **HeadlessWorld geoSig now includes component props** — the browser engine's
+  "bumper radius change must rebuild the body" rule the headless copy was missing. Caught by
+  a protocol test; co-op silently benefited.
+* **Compatibility surfaces kept:** `sim.M`, `sim.obstacleBodies` (engine's list via the local
+  bridge; empty on the Worker transport) and `sim.instWireMap()` (re-states the world).
+  Existing probes keep their direct-write contract under `?worker=0`.
+* **Conversion event payload** carries the full cloned vehicle doc — the page needs it for
+  drawing/inspector of converted robots, and cloning at convert-time (engine side) is the one
+  point where both heaps can agree on the doc.
+
+**Environment finding (important for the next session on this box):** headless Chromium on
+this Linux machine cannot load ANY `http://` page — even a 15-byte static page over two
+different local servers hangs CDP navigation (renderer never commits; sometimes not even a
+request reaches the server), while `data:` and `file://` loads work. GPU init also fails
+loudly (Vulkan/EGL), fixed for the working paths with `--no-zygote --disable-vulkan
+--no-sandbox`. So **no smoke probe can run here** — that is the box, not the app. To verify
+M10 end-to-end, run on the Mac: `npm run smoke` (all existing probes now carry `?worker=0`)
+plus a manual Worker-mode pass (open the app WITHOUT the param: World tab → Play → bots
+move; Step; drag a bot → Reset returns it to the drop; heat sensor still lags; propagation
+status pill counts). A dedicated `smoke:worker` probe is deliberately NOT committed — an
+untested probe is exactly the false-failure generator the README "Testing" section warns
+about; write it on a machine that can run it.
+
+**Not run here (needs a working browser):** everything browser-only — Worker boot in Chrome
+(importScripts path resolution + dynamic import in a classic worker), pan/drag UX over the
+Worker transport, all twelve existing probes. The Node-side worker-transport test covers the
+worker script's boot order, message loop and structured-clone replies; the protocol tests
+cover engine semantics; but treat the in-browser pass as REQUIRED before shipping M10.
