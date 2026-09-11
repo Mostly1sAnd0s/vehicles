@@ -71,7 +71,7 @@ try {
   };
 
   await send('Page.enable', {});
-  await send('Page.navigate', { url: `http://127.0.0.1:${WEB}/index.html?nc=${NONCE}` });
+  await send('Page.navigate', { url: `http://127.0.0.1:${WEB}/index.html?nc=${NONCE}&worker=0` });
   for (let i = 0; i < 60; i++) {
     const ready = await ev(`document.readyState === 'complete' && !!window.__app()`).catch(() => false);
     if (ready) break;

@@ -51,7 +51,7 @@ try {
   // everything served immediately), so a long wait PLUS a retry is what absorbs it.
   let booted = false;
   for (let attempt = 0; attempt < 3 && !booted; attempt++) {
-    await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
+    await send('Page.navigate', { url: `http://localhost:${WEB}/index.html?worker=0` });
     for (let i = 0; i < 45; i++) {
       if ((await evalJs('typeof window.__app').catch(() => '')) === 'function') { booted = true; break; }
       await sleep(500);

@@ -1,25 +1,24 @@
 /**
- * World Simulator: Matter.js physics + tested sensor/actuator core.
+ * World Simulator: the page half of the simulation (M10.2).
+ *
+ * Physics, sensors, actuation and propagation run inside a HeadlessWorld reached through
+ * the sim protocol (src/simulation/simProtocol.js) — on a Worker by default, on the main
+ * thread via `?worker=0`. This file keeps documents, seeds, selection, camera, UI and
+ * drawing; `inst.body` is the real Matter body on the local transport (same heap) and a
+ * pose mirror otherwise — every renderer/hit-test read works unchanged.
  * Fixed-timestep loop, camera pan/zoom, element editing, instance tools.
  */
 
-import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
-import { buildVehicleGrid } from '../src/sensors/vehicleDetection.js';
-import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
-import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
-import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
-import { findInstanceAt, componentSize, collisionRadius } from '../src/models/hitTest.js';
-import { bumperAnchorsFor, applyBumperForces } from '../src/simulation/bumpers.js';
+import { findInstanceAt, componentSize } from '../src/models/hitTest.js';
 import { isSolidBody, solidBodyRadius, solidBodyCircles, pushOutOfCircle, pushClearance } from '../src/models/solidBody.js';
 import { defaultElementTemperature } from '../src/models/heatSource.js';
 import { formationPoses } from '../src/models/formation.js';
+import { applyReply } from './simMirror.js';
+import { createSimBridge } from './simBridge.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
 import { lightenHex, DEFAULT_BODY_COLOR } from './color.js';
-
-// Matter.js is loaded as a classic script (public/vendor/matter.min.js)
-const M = globalThis.Matter;
 
 /** Max points kept per instance for the Paths overlay. Long runs stay O(1). */
 const PATH_CAP = 2000;
@@ -30,7 +29,7 @@ export class WorldSim {
     this.ui = ui;
     this.state = state;
     this.hooks = hooks;
-    this.M = window.Matter;
+    this.M = window.Matter; // kept for direct-body compatibility (local transport runs in this heap)
 
     this.view = { x: 0, y: 0, zoom: 1 };
     this.playing = false;
@@ -43,22 +42,33 @@ export class WorldSim {
     this.selectedElement = null;
     this.selectedInstance = null;   // a running vehicle shown in the inspector (X/Y/Rot)
     this.selectedRemoteBot = null;  // a shared (co-op) bot selected for the X/Y/Rot popup
-    this.stepCount = 0;        // monotonic sim-step counter (drives cooldownTicks)
-    this.convertedCount = 0;   // total instances converted this run (reset on reset())
-    this.instances = [];          // {id, protoId, body, seed:{x,y,rotation}}
-    this.obstacleBodies = [];
+    this.convertedCount = 0;   // mirrored from the engine (reset on reset())
+    this.instances = [];          // {id, protoId, body(matter|mirror), seed:{x,y,rotation}, path, lastSamples, lastMotors}
     this.lastSamples = [];        // for beam drawing (per instance)
     this.showValues = true;       // on-body sensor/motor readouts
     this.paths = false;           // show motion trails behind each robot
     this.acc = 0;
     this.lastT = performance.now();
 
-    this.engine = M.Engine.create({ gravity: { x: 0, y: 0 } });
+    // Everything physical lives behind this bridge: a Worker by default (physics + sensors
+    // never touch the UI thread), the main thread under `?worker=0` or when the Worker
+    // fails to boot (loud fallback). One protocol either way — see simBridge/simProtocol.
+    this.bridge = createSimBridge({
+      configs: this.state.configs,
+      dtMs: this.dtMs,
+      onReply: (reply, helpers) => this._onSimReply(reply, helpers),
+    });
+    this.bridge.send({
+      op: 'init',
+      dtMs: this.dtMs,
+      elements: this.worldDoc.elements ?? [],
+      vehicles: this._protoDocs(),
+      instances: [],
+    });
 
     this.bindUI();
     this.bindCanvas();
     this.syncInstances();
-    this.buildObstacles();
     this.renderPrototypes();
     this.loop();
   }
@@ -67,19 +77,33 @@ export class WorldSim {
   get dtMs() { return this.state.configs.app.defaults.fixedTimestepMs; }
   timeScale() { return this.worldDoc.physics?.timeScale ?? 1; }
 
-  // ---------------- physics ----------------
-  buildObstacles() {
-    const M = this.M;
-    for (const b of this.obstacleBodies) M.Composite.remove(this.engine.world, b);
-    this.obstacleBodies = [];
-    for (const obs of worldElementsToSnapshot(this.worldDoc.elements, this.state.configs).obstacles) {
-      let body;
-      if (obs.type === 'circle') body = M.Bodies.circle(obs.x, obs.y, obs.radius, { isStatic: true });
-      else body = M.Bodies.rectangle(obs.x, obs.y, obs.width, obs.height, { isStatic: true, angle: obs.rotation });
-      this.obstacleBodies.push(body);
-      M.Composite.add(this.engine.world, body);
-    }
+  // ---------------- engine bridge ----------------
+  // The full desired state for the engine: elements + prototype docs + running instances
+  // with their page-owned seeds. `sync` is idempotent (the engine diffs), so every
+  // structural change just re-states the world — obstacles, vehicles and instances all
+  // rebuild through that one seam.
+  _protoDocs() {
+    return this.worldDoc.vehiclePrototypes.map(p => ({ id: p.id, name: p.name, vehicle: p.vehicle ?? p._vehicle ?? null }));
   }
+
+  _desiredInstances() {
+    return this.instances.map(i => ({ id: i.id, protoId: i.protoId, seed: { ...i.seed } }));
+  }
+
+  _syncEngine() {
+    if (this.coopMode) return; // the local engine is inert while the shared world owns the canvas
+    this.bridge.send({
+      op: 'sync',
+      elements: this.worldDoc.elements ?? [],
+      vehicles: this._protoDocs(),
+      instances: this._desiredInstances(),
+    });
+  }
+
+  /** Static obstacle bodies on the local transport (the engine owns them; this is a read view). */
+  get obstacleBodies() { return this.bridge.obstacleBodies ?? []; }
+
+  buildObstacles() { this._syncEngine(); }
 
   /**
    * Push live bots out of any solid light they are now inside, and adopt the new
@@ -97,7 +121,7 @@ export class WorldSim {
     const clearance = pushClearance(this.state.configs);
     let moved = 0;
     for (const inst of this.instances) {
-      if (!inst.body) continue;
+      if (!inst.body?.position) continue;
       const start = { x: inst.body.position.x, y: inst.body.position.y };
       let pose = { id: inst.id, x: start.x, y: start.y };
       for (const c of circles) {
@@ -105,69 +129,21 @@ export class WorldSim {
         if (evicted) pose = evicted;
       }
       if (Math.hypot(pose.x - start.x, pose.y - start.y) < 1e-9) continue;
-      M_BodySetPosition(this.M, inst.body, { x: pose.x, y: pose.y });
-      M.Body.setVelocity(inst.body, { x: 0, y: 0 });
-      M.Body.setAngularVelocity(inst.body, 0);
+      // THROUGH the bridge: the engine re-seats the body, zeroes momentum and adopts the
+      // seed as the reset target; the page follows its own seed to match.
+      this.bridge.send({ op: 'move', id: inst.id, x: pose.x, y: pose.y });
       inst.seed = { x: pose.x, y: pose.y, rotation: inst.body.angle };
       moved++;
     }
     return moved;
   }
 
-  makeInstanceBody(inst) {
-    const M = this.M;
-    const v = this.vehicleFor(inst);
-    if (!v) return null;
-    const parts = [M.Bodies.rectangle(0, 0, v.body.width, v.body.height, { density: 0.001 })];
-    for (const c of v.components) {
-      if (!c.local) continue;
-      const def = this.componentDef(c.type);
-      if (def?.id === 'bumper') continue; // ring force field, not a solid part (src/simulation/bumpers.js)
-      parts.push(M.Bodies.circle(c.local.x, c.local.y, collisionRadius(c, def), { density: 0.002 }));
-    }
-    return M.Body.create({ parts });
-  }
-
   syncInstances() {
-    // Keep running instances in step with the current vehicle doc (call after
-    // any editor change). Wire maps refresh on every wiring change (cheap);
-    // physics bodies only rebuild when component geometry actually changed,
-    // preserving pose AND velocity so edits never stop a moving car.
-    for (const inst of this.instances) {
-      const v = this.vehicleFor(inst);
-      if (!v) continue;
-      const wireSig = JSON.stringify(v.wires ?? []);
-      if (wireSig !== inst.wireSig) {
-        inst.wireSig = wireSig;
-        this.instWireMap(inst);
-      }
-      // props in the signature too: a bumper's radius/density (or any future prop-driven
-      // geometry) must trigger a rebuild, not just a move or type change.
-      const geoSig = JSON.stringify((v.components ?? []).map(c => [c.id, c.type, c.local?.x, c.local?.y, c.props ?? null]));
-      if (inst.body && geoSig === inst.geoSig) continue;
-      const old = inst.body;
-      if (old) M.Composite.remove(this.engine.world, old);
-      inst.body = null;
-      const body = this.makeInstanceBody(inst);
-      if (!body) continue;
-      if (old) {
-        // keep pose + momentum across the rebuild
-        M.Body.setPosition(body, old.position);
-        M.Body.setAngle(body, old.angle);
-        M.Body.setVelocity(body, old.velocity);
-        M.Body.setAngularVelocity(body, old.angularVelocity);
-      } else {
-        // new instances spawn at seed; existing keep their pose
-        if (!inst.hasSpawned) {
-          M.Body.setPosition(body, { x: inst.seed.x, y: inst.seed.y });
-          M.Body.setAngle(body, inst.seed.rotation);
-        }
-      }
-      inst.body = body;
-      inst.hasSpawned = true;
-      inst.geoSig = geoSig;
-      M.Composite.add(this.engine.world, body);
-    }
+    // Keep running instances in step with the current vehicle doc (call after any editor
+    // change). The engine's diff refreshes wire maps on wiring changes and rebuilds bodies
+    // only on geometry changes (props included), preserving pose AND momentum — edits
+    // never stop a moving car.
+    this._syncEngine();
   }
 
   componentDef(type) { return this.state.configs.components.components.find(c => c.id === type); }
@@ -186,88 +162,18 @@ export class WorldSim {
     return inst?.vehicleOverride ?? this.prototypeVehicle(inst?.protoId);
   }
 
-  // wire map per instance: wheelId -> [{wire, sensorId}]
-  instWireMap(inst) {
-    const v = this.vehicleFor(inst);
-    const map = {};
-    for (const w of v.wires ?? []) {
-      (map[w.to.componentId] ??= []).push({ wire: w, sensorId: w.from.componentId });
-    }
-    inst.wireMap = map;
-  }
-
-  // ---------------- simulation step ----------------
-  // per-wheel grip -> top-down drag on each composite body; reads the
-  // current wheel friction props every tick so inspector tuning applies at once.
-  applyWheelFriction(inst) {
-    const v = this.vehicleFor(inst);
-    const cfg = this.state.configs.actuators?.powered_wheel ?? {};
-    const wheels = (v?.components ?? []).filter(c => this.componentDef(c.type)?.category === 'actuator' && c.local);
-    let f = cfg.defaultFriction ?? 0.5;
-    if (wheels.length) {
-      f = wheels.reduce((sum, c) => sum + (c.props?.friction ?? cfg.defaultFriction ?? 0.5), 0) / wheels.length;
-    }
-    inst.body.frictionAir = wheelFrictionAir(f, cfg);
+  // Compatibility seam (tests + probes): wiring lives on the prototype doc; re-stating the
+  // world IS the refresh now — the engine diffs wireSig itself. Synchronous on the local
+  // transport, so callers see the change by the time this returns.
+  instWireMap() {
+    this._syncEngine();
   }
 
   // ---------------- configuration propagation ("replicate") ----------------
-  // A host carrying a `propagate` component copies its whole vehicle doc onto
-  // any nearby robot whose config differs (nearest first, within the shared cap),
-  // producing a true clone that carries the component onward. Idempotent: a pair
-  // whose configs already match never re-fires, so a single seed converges to
-  // all-converted and stops. Converted instances get a brief flash; a status pill
-  // reports converted/total. reset() clears all of it back to the initial mix.
-  stepPropagation() {
-    this.stepCount++;
-    const live = this.instances.filter(i => i.body);
-    if (live.length < 2) { this.updatePropagationStatus(); return; }
-    // Pre-conversion snapshot of every live instance (positions + config sig).
-    const cand = live.map(i => ({ id: i.id, x: i.body.position.x, y: i.body.position.y, signature: vehicleSignature(this.vehicleFor(i)) }));
-    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-    // Hosts are captured from PRE-conversion state: an instance that only acquires
-    // the Propagator this step spreads on a LATER step, so a fresh clone can't
-    // turn around and re-convert its own source within the same pass.
-    const hosts = live.filter(i => (this.vehicleFor(i)?.components ?? []).some(c => c.type === 'propagate'));
-    let anyConverted = 0;
-    for (const inst of hosts) {
-      const v = this.vehicleFor(inst);
-      const prop = v.components.find(c => c.type === 'propagate');
-      const p = prop.props ?? {};
-      const threshold = p.threshold ?? 260;
-      const cooldownTicks = p.cooldownTicks ?? 0;
-      const maxConverted = (p.maxConverted == null || Number.isNaN(Number(p.maxConverted))) ? null : Math.max(0, Number(p.maxConverted));
-      // Cooldown: a freshly-converted instance waits `cooldownTicks` steps before it
-      // may itself propagate (bounds spread speed; 0 = immediate). A seed that
-      // carried the component from the start is always eligible.
-      const eligible = inst.convertedAt == null || (this.stepCount - inst.convertedAt >= cooldownTicks);
-      if (!eligible) continue;
-      const hostSig = cand.find(c => c.id === inst.id)?.signature;
-      // The trigger radiates from the Propagator's OWN position (not the body
-      // centre): a robot that bumps the side of the host carrying it is close
-      // enough to convert, while one on the far side stays out of range.
-      const a = inst.body.angle;
-      const lx = prop.local?.x ?? 0, ly = prop.local?.y ?? 0;
-      const hx = inst.body.position.x + Math.cos(a) * lx - Math.sin(a) * ly;
-      const hy = inst.body.position.y + Math.sin(a) * lx + Math.cos(a) * ly;
-      const targets = selectPropagationTargets(
-        { id: inst.id, x: hx, y: hy, signature: hostSig },
-        cand, { threshold, maxConverted, alreadyConverted: this.convertedCount });
-      for (const t of targets) {
-        const target = live.find(i => i.id === t.id);
-        if (!target || target.vehicleOverride) continue; // guard same-step multi-source races
-        const nonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        target.vehicleOverride = cloneVehicleForConversion(v, nonce);
-        target.converted = true;
-        target.convertedAt = this.stepCount;
-        target.flashUntil = now() + 700;
-        this.convertedCount++;
-        anyConverted++;
-      }
-    }
-    if (anyConverted) this.syncInstances(); // rebuild converted bodies + wire maps in place, pose preserved
-    this.updatePropagationStatus();
-  }
-
+  // The conversion logic itself lives in the engine (it is position-based, and the engine
+  // is authoritative — HeadlessWorld._stepPropagation). The page only mirrors the outcome:
+  // converted docs arrive as protocol events (simMirror swaps `vehicleOverride`), the
+  // converted counter rides every reply, and this pill renders both.
   updatePropagationStatus() {
     const hostProp = inst => (this.vehicleFor(inst)?.components ?? []).find(c => c.type === 'propagate');
     const hasHost = this.instances.some(hostProp);
@@ -289,98 +195,56 @@ export class WorldSim {
     el.textContent = `Propagation ${this.convertedCount}/${cap ?? this.instances.length} converted`;
   }
 
-  step() {
-    const M = this.M;
-    for (const inst of this.instances) if (inst.body) this.applyWheelFriction(inst);
-    M.Engine.update(this.engine, this.dtMs);
-    // Bumper ring fields (soft radial barriers, see src/simulation/bumpers.js): every ring
-    // pushes back any other bot whose surface — body parts OR bumper rings — crosses it,
-    // stiffness = per-instance density.
-    const bumperEntries = this.instances
-      .filter(i => i?.body)
-      .map(i => ({ body: i.body, bumpers: bumperAnchorsFor(this.vehicleFor(i), i.body) }));
-    if (bumperEntries.some(e => e.bumpers.length)) applyBumperForces(M, bumperEntries);
+  step(n = 1) {
+    if (this.coopMode) return; // the shared world is stepped authoritatively on the server
+    // One protocol command. Local transport: the reply is delivered synchronously, so
+    // step() has exactly its classic sync semantics. Worker transport: the reply lands
+    // when the engine is done — the UI never waits, and `bridge.busy` sheds load (below).
+    this.bridge.send({
+      op: 'step',
+      n,
+      // samples/motors are the payload hogs at fleet scale; they are needed only while a
+      // renderer reads them (Beams or Values). Paths record engine-side while toggled on.
+      detail: this.beams || this.showValues,
+      trackPaths: this.paths,
+    });
+  }
 
-    // Record trajectory points for the Paths overlay. Capped; cleared on reset().
-    for (const inst of this.instances) {
-      if (!inst.body) continue;
-      if (!Array.isArray(inst.path)) inst.path = [];
-      inst.path.push({ x: Math.round(inst.body.position.x), y: Math.round(inst.body.position.y) });
-      if (inst.path.length > PATH_CAP) inst.path.shift();
-    }
-
-    // Configuration propagation: any `propagate` component copies its host's
-    // vehicle doc onto nearby robots whose config differs (before actuation, so
-    // a freshly-converted robot drives with its new config this same step).
-    this.stepPropagation();
-
-    const snapshot = worldElementsToSnapshot(this.worldDoc.elements, this.state.configs);
-    // Fleet poses for vehicle-detection sensors: every instance's current world
-    // pose. Each sensor excludes itself by instanceId (see sampleSensors).
-    snapshot.vehicles = this.instances
-      .filter(i => i.body)
-      .map(i => ({ id: i.id, x: i.body.position.x, y: i.body.position.y, angle: i.body.angle }));
-    // Spatial-hash index of this step's fleet poses, shared by every vehicle-detection
-    // sensor (O(near) per query instead of O(fleet) — see src/simulation/spatialGrid.js).
-    snapshot.vehicleGrid = buildVehicleGrid(snapshot.vehicles, this.state.configs.sensors);
-    const thrustScale = this.state.configs.app.defaults.thrustScale ?? 0.25;
-    const actCfg = this.state.configs.actuators.powered_wheel;
-    const allSamples = [];
-
-    for (const inst of this.instances) {
-      const v = this.vehicleFor(inst);
-      if (!v) continue; // proto removed mid-run: skip rather than crash the loop
-      const pose = { x: inst.body.position.x, y: inst.body.position.y, angle: inst.body.angle };
-      const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.state.configs.sensors, {
-        // Thermal mass needs a timestep to lag against; the fixed dt (not the scaled wall
-        // clock) is what the physics itself advances by, so heat stays identical at any Time.
-        sensorStates: inst.sensorStates,
-        dtMs: this.dtMs,
-      });
-      inst.lastSamples = samples;
-      allSamples.push(...samples.map(s => ({ ...s, instanceId: inst.id })));
-
-      const sensorValue = id => samples.find(s => s.componentId === id)?.value ?? 0;
-      // Resolve combinational logic gates (topological; a sensor reading is
-      // coerced to digital when its 'digital' toggle is on). Gate outputs feed
-      // actuators or other gates through the same wires graph.
-      const gateValues = evaluateLogicGates(v, sensorValue);
-      inst.gateValues = gateValues;
-      const gateIds = new Set((v.logicGates ?? []).map(g => g.id));
-      inst.lastMotors = []; // per-wheel signed force (for on-body readout)
-      for (const c of v.components) {
-        if (!c.local || this.componentDef(c.type)?.category !== 'actuator') continue;
-        const feeders = inst.wireMap[c.id];
-        let force = 0;
-        for (const f of feeders ?? []) {
-          // A feeder may come from a raw sensor OR a logic gate output.
-          const srcVal = gateIds.has(f.sensorId) ? (gateValues[f.sensorId] ?? 0) : sensorValue(f.sensorId);
-          force += computeActuation(srcVal, [f.wire], actCfg);
-        }
-        force *= actuatorPolaritySign(c.polarity, actCfg); // per-motor forward/reverse
-        force = applyMotorPower(force, c.props?.motorPower ?? actCfg.defaultMotorPower);
-        inst.lastMotors.push({ id: c.id, local: { ...c.local }, force });
-        if (!feeders?.length) continue;
-        const dir = pose.angle + (c.localRotation ?? 0);
-        const fx = Math.cos(dir) * force * thrustScale;
-        const fy = Math.sin(dir) * force * thrustScale;
-        const pt = { x: inst.body.position.x + (Math.cos(pose.angle) * c.local.x - Math.sin(pose.angle) * c.local.y),
-                     y: inst.body.position.y + (Math.sin(pose.angle) * c.local.x + Math.cos(pose.angle) * c.local.y) };
-        M.Body.applyForce(inst.body, pt, { x: fx, y: fy });
+  // Engine replies -> page mirrors: poses (real bodies locally, mirrors on the Worker),
+  // per-instance samples/motors, flash, converted docs, path points, converted count.
+  _onSimReply(reply, helpers = {}) {
+    applyReply(this.instances, reply, {
+      pathsOn: this.paths,
+      pathCap: PATH_CAP,
+      resolveBody: helpers.resolveBody ?? null,
+      reset: reply.ack === 'reset',
+    });
+    // Beams render from the flat world-sample list, rebuilt from the freshest replies.
+    if (reply.bots?.some(b => b.samples !== undefined)) {
+      this.lastSamples = [];
+      for (const inst of this.instances) {
+        for (const s of inst.lastSamples ?? []) this.lastSamples.push({ ...s, instanceId: inst.id });
       }
+    } else if (!this.beams && !this.showValues) {
+      this.lastSamples = [];
     }
-    this.lastSamples = allSamples;
+    if (reply.convertedCount != null) this.convertedCount = reply.convertedCount;
+    this.updatePropagationStatus();
   }
 
   loop() {
     const frame = t => {
-      const timeScale = this.timeScale();
       // Single-player only: the shared world is stepped authoritatively on the server.
       if (this.playing && !this.coopMode) {
-        this.acc += Math.min(t - this.lastT, 100) * timeScale;
-        while (this.acc >= this.dtMs) {
-          this.step();
-          this.acc -= this.dtMs;
+        this.acc += Math.min(t - this.lastT, 100) * this.timeScale();
+        if (this.bridge.busy) {
+          // A step batch is still in flight on the Worker: shed time rather than queue
+          // unbounded work — under overload the sim loses wall-clock time, the UI does not.
+          this.acc = Math.min(this.acc, this.dtMs);
+        } else if (this.acc >= this.dtMs) {
+          const n = Math.min(8, Math.floor(this.acc / this.dtMs));
+          this.acc -= n * this.dtMs;
+          this.step(n);
         }
       }
       this.lastT = t;
@@ -478,11 +342,12 @@ export class WorldSim {
           }
         }
       } else if (drag.mode === 'instance') {
-        // setting position each move wins per-frame; zero momentum so it doesn't fling
+        // The engine's `move` re-seats the body and zeroes momentum so it never flings.
+        // Local transport applies synchronously via the reply; the Worker transport gets an
+        // optimistic mirror write so the bot tracks the cursor between replies.
         const w = this.toWorld(e);
-        M_BodySetPosition(this.M, drag.inst.body, w);
-        M.Body.setVelocity(drag.inst.body, { x: 0, y: 0 });
-        M.Body.setAngularVelocity(drag.inst.body, 0);
+        this.bridge.send({ op: 'move', id: drag.inst.id, x: w.x, y: w.y });
+        this._optimisticPose(drag.inst, w.x, w.y);
       } else {
         this.view.x = drag.view0.x - (e.clientX - drag.e0.x) / this.view.zoom;
         this.view.y = drag.view0.y - (e.clientY - drag.e0.y) / this.view.zoom;
@@ -490,8 +355,11 @@ export class WorldSim {
     });
     window.addEventListener('mouseup', () => {
       if (drag?.mode === 'instance' && drag.inst.body) {
-        // adopt the dropped pose as the seed so Reset restores it
-        drag.inst.seed = { x: drag.inst.body.position.x, y: drag.inst.body.position.y, rotation: drag.inst.body.angle };
+        // adopt the dropped pose as the seed so Reset restores it — final authoritative
+        // move (engine adopts it as its seed too), then the page mirrors the seed.
+        const p = drag.inst.body.position;
+        this.bridge.send({ op: 'move', id: drag.inst.id, x: p.x, y: p.y });
+        drag.inst.seed = { x: p.x, y: p.y, rotation: drag.inst.body.angle };
       }
       // Co-op (M5 p3): a dropped element lands at its final pose — sync the move out once.
       if (drag?.mode === 'element') {
@@ -690,40 +558,34 @@ export class WorldSim {
     this.hooks?.onElementChange?.({ op: 'add', element: el });
   }
 
+  // Optimistic mirror write for the Worker transport only (the local transport's reply is
+  // synchronous — the engine has already moved the real body by the time send() returns).
+  _optimisticPose(inst, x, y) {
+    if (this.bridge.transport === 'local') return;
+    const b = inst?.body;
+    if (!b) return;
+    if (b.position) { b.position.x = x; b.position.y = y; } else b.position = { x, y };
+    b.velocity = { x: 0, y: 0 };
+  }
+
   // Move a running vehicle to an explicit pose (used by the inspector) and adopt
   // it as the seed so Reset restores that exact placement.
   setInstancePose(inst, x, y, rot) {
-    if (!inst || !inst.body) return;
-    M_BodySetPosition(this.M, inst.body, { x, y });
-    M_BodySetAngle(this.M, inst.body, rot);
-    inst.body.velocity = { x: 0, y: 0 };
-    inst.body.angularVelocity = 0;
+    if (!inst) return;
+    this.bridge.send({ op: 'move', id: inst.id, x, y, rot });
+    this._optimisticPose(inst, x, y);
     inst.seed = { x, y, rotation: rot };
   }
 
   reset() {
-    let hadPropagation = false;
-    for (const inst of this.instances) {
-      // Bodyless instances (a body that failed to build) must not turn Reset into a throw —
-      // HeadlessWorld's equivalent already skips them; this is the parity fix.
-      if (inst.body) {
-        M_BodySetPosition(this.M, inst.body, { x: inst.seed.x, y: inst.seed.y });
-        M_BodySetAngle(this.M, inst.body, inst.seed.rotation);
-        inst.body.velocity = { x: 0, y: 0 };
-        inst.body.angularVelocity = 0;
-      }
-      inst.path = []; // fresh trail after a reset
-      // ...and sensors cool back to ambient, or a reset robot resumes hot (see HeadlessWorld.reset).
-      inst.sensorStates?.clear();
-      // Restore the initial mix: drop any propagated clone + bookkeeping.
-      if (inst.vehicleOverride || inst.converted) hadPropagation = true;
-      inst.vehicleOverride = null;
-      inst.converted = false;
-      inst.convertedAt = null;
-      inst.flashUntil = 0;
-    }
+    // Seeds ride with the command (formation buttons set fresh seeds right before resetting).
+    // The engine returns bodies to seeds, drops converted overrides, cools sensor heat and
+    // zeroes its counters; the reply clears the page mirrors (paths, flash, overrides,
+    // samples) — synchronously on the local transport.
+    const seeds = {};
+    for (const inst of this.instances) seeds[inst.id] = inst.seed;
+    this.bridge.send({ op: 'reset', seeds });
     this.convertedCount = 0;
-    if (hadPropagation) this.syncInstances(); // convert clone bodies back to the prototype doc
     this.updatePropagationStatus();
     this.acc = 0;
   }
@@ -828,15 +690,12 @@ export class WorldSim {
         existing[i].seed = { x: insts[i].position.x, y: insts[i].position.y, rotation: insts[i].rotation };
       }
     }
-    for (let i = insts.length; i < existing.length; i++) {
-      M_CompositeRemove(this.M, this.engine.world, existing[i].body);
-    }
     this.instances = this.instances.filter(i => i.protoId !== proto.id).concat(existing);
-    // remove bodies of dropped instances (only this proto: other vehicle
-    // types share this.instances and their ids are not in proto.instances)
+    // drop instances no longer documented (only this proto: other vehicle types share
+    // this.instances and their ids are not in proto.instances). The engine's diff removes
+    // their bodies on the sync below.
     for (const inst of this.instances) {
-      if (inst.protoId === proto.id && !proto.instances.some(s => s.id === inst.id) && inst.body) {
-        M_CompositeRemove(this.M, this.engine.world, inst.body);
+      if (inst.protoId === proto.id && !proto.instances.some(s => s.id === inst.id)) {
         this.instances.splice(this.instances.indexOf(inst), 1);
       }
     }
@@ -872,11 +731,8 @@ export class WorldSim {
 
   /** Remove one prototype's running instances from physics + bookkeeping. */
   dropInstancesOf(protoId) {
-    for (const inst of [...this.instances]) {
-      if (inst.protoId !== protoId) continue;
-      M_CompositeRemove(this.M, this.engine.world, inst.body);
-      this.instances.splice(this.instances.indexOf(inst), 1);
-    }
+    this.instances = this.instances.filter(i => i.protoId !== protoId);
+    this._syncEngine(); // the engine's diff removes the bodies with them
   }
 
   // ---------------- inspector ----------------
@@ -1088,7 +944,4 @@ export class WorldSim {
   }
 }
 
-function M_BodySetPosition(M, body, p) { if (body) M.Body.setPosition(body, p); }
-function M_BodySetAngle(M, body, a) { if (body) M.Body.setAngle(body, a); }
-function M_CompositeRemove(M, world, body) { if (body) M.Composite.remove(world, body); }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }

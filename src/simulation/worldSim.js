@@ -44,6 +44,12 @@ export class HeadlessWorld {
     this.convertedCount = 0;
     this.lastSamples = [];
     this.lastSnapshot = null;
+    // M10.2 protocol surface: conversions happen inside the engine (they are position-based),
+    // but the PAGE must learn about them to mirror `vehicleOverride` for drawing/inspector.
+    // The protocol drains this log into its reply events; `reset` drops it so a pre-reset
+    // conversion can never replay onto the fresh world. Co-op ignores it (its snapshot
+    // already carries per-bot geometry).
+    this.conversionEvents = [];
     this._buildObstacles();
   }
 
@@ -302,6 +308,7 @@ export class HeadlessWorld {
     }
     this.convertedCount = 0;
     this.stepCount = 0;
+    this.conversionEvents = [];
     // Converted bodies were built from the cloned doc — swap them back to the prototype's.
     if (hadPropagation) this._syncInstances();
   }
@@ -347,6 +354,8 @@ export class HeadlessWorld {
         target.flashUntil = _now() + 700;
         this.convertedCount++;
         anyConverted++;
+        // drained by the sim protocol into reply events (page mirrors the converted doc)
+        this.conversionEvents.push({ type: 'converted', id: target.id, vehicle: target.vehicleOverride });
       }
     }
     if (anyConverted) this._syncInstances();
@@ -360,7 +369,10 @@ export class HeadlessWorld {
       if (!v) continue;
       const wireSig = JSON.stringify(v.wires ?? []);
       if (wireSig !== inst.wireSig) { inst.wireSig = wireSig; inst.wireMap = this._wireMap(v); }
-      const geoSig = JSON.stringify((v.components ?? []).map(c => [c.id, c.type, c.local?.x, c.local?.y]));
+      // props in the signature too: a bumper's radius/density (or any prop-driven collision
+      // radius) must trigger a rebuild, not just a move or type change — parity with the
+      // browser engine's geoSig, which already carried props (M10.2 makes this the only one).
+      const geoSig = JSON.stringify((v.components ?? []).map(c => [c.id, c.type, c.local?.x, c.local?.y, c.props ?? null]));
       if (inst.body && geoSig === inst.geoSig) continue;
       const old = inst.body;
       if (old) M_CompositeRemove(M, this.engine.world, old);

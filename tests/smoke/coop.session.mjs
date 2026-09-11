@@ -89,7 +89,7 @@ try {
     // Headless Chrome under back-to-back smoke load can stall a fresh target's first paint;
     // retry with a full re-navigation rather than fail the whole probe on infra flake.
     for (let attempt = 0; attempt < 2; attempt++) {
-      await pg.ev(`location.href='http://localhost:${WEB}/index.html'`).catch(() => {});
+      await pg.ev(`location.href='http://localhost:${WEB}/index.html?worker=0'`).catch(() => {});
       for (let i = 0; i < 60 && (await pg.ev('typeof window.__app').catch(() => null)) !== 'function'; i++) await sleep(250);
       if ((await pg.ev('typeof window.__app').catch(() => null)) === 'function') return;
     }

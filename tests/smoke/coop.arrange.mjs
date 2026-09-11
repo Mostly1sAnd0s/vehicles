@@ -99,7 +99,7 @@ try {
 
   // ---- host page ---------------------------------------------------------
   const H = await newPage();
-  await boot(H, `http://localhost:${WEB}/index.html?nc=${NONCE}`);
+  await boot(H, `http://localhost:${WEB}/index.html?nc=${NONCE}&worker=0`);
   const hrefH = await H.ev('location.href');
   if (!hrefH.includes(NONCE)) fail(`host page is STALE (${hrefH}) — another browser owns CDP ${PORT}`);
   await H.ev(`document.getElementById('tab-world').click()`);
@@ -142,7 +142,7 @@ try {
 
   // ---- joiner page -------------------------------------------------------
   const J = await newPage();
-  await boot(J, `http://localhost:${WEB}/index.html?nc=${NONCE}j`);
+  await boot(J, `http://localhost:${WEB}/index.html?nc=${NONCE}j&worker=0`);
   const hrefJ = await J.ev('location.href');
   if (!hrefJ.includes(NONCE)) fail(`joiner page is STALE (${hrefJ})`);
   await J.ev(`document.getElementById('mode-coop').click()`);

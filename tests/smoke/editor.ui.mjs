@@ -62,8 +62,8 @@ try {
 
   await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await sleep(1500); // let the renderer settle before navigating (headless can stall module loads otherwise)
-  await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
-  const navUrl = `http://localhost:${WEB}/index.html`;
+  await send('Page.navigate', { url: `http://localhost:${WEB}/index.html?worker=0` });
+  const navUrl = `http://localhost:${WEB}/index.html?worker=0`;
   let navCount = 0;
   for (let i = 0; i < 90; i++) { // 45s budget: poll for boot, re-navigate if the renderer stalls
     const probe = await evalJs(`typeof window.__app`).catch(() => 'eval-error');

@@ -58,7 +58,7 @@ try {
   await send('Runtime.enable');
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
+    await send('Page.navigate', { url: `http://localhost:${WEB}/index.html?worker=0` });
     let booted = false;
     for (let i = 0; i < 30; i++) { if (await evalJs('document.readyState === "complete" && typeof window.__app === "function"')) { booted = true; break; } await sleep(400); }
     if (booted) break;

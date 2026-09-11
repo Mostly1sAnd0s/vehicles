@@ -147,7 +147,7 @@ const poll = async (pg, fnBody, ms = 12000, label = '') => {
 
 const H = await newPage();
 step('host page boots (no invite hash)');
-await boot(H, `http://localhost:${WEB}/index.html`);
+await boot(H, `http://localhost:${WEB}/index.html?worker=0`);
 // Surface anything the page swallows (CoopClient._emit catches subscriber throws, async ones become
 // unhandled rejections) so a failure names the broken step instead of just timing out.
 await H.ev(`window.__rej=[];addEventListener('unhandledrejection',e=>window.__rej.push(String(e.reason?.message??e.reason)));1`);

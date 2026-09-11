@@ -73,7 +73,7 @@ try {
   await send('Page.enable');
   await send('Runtime.enable');
 
-  await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` });
+  await send('Page.navigate', { url: `http://localhost:${WEB}/index.html?worker=0` });
   let booted = false;
   for (let attempt = 0; attempt < 2 && !booted; attempt++) {
     for (let i = 0; i < 30; i++) {
@@ -81,7 +81,7 @@ try {
       if (r.result?.value) { booted = true; break; }
       await sleep(400);
     }
-    if (!booted) { console.log('RENAV: renderer stalled, re-navigating (' + (attempt + 1) + '/2)'); await send('Page.navigate', { url: `http://localhost:${WEB}/index.html` }); }
+    if (!booted) { console.log('RENAV: renderer stalled, re-navigating (' + (attempt + 1) + '/2)'); await send('Page.navigate', { url: `http://localhost:${WEB}/index.html?worker=0` }); }
   }
   if (!booted) fail('editor app did not boot:');
   console.log('BOOT:', JSON.stringify(await evalJs(`JSON.stringify({ ready: document.readyState, app: typeof window.__app, pre: document.querySelector('pre')?.textContent ?? null })`)));
