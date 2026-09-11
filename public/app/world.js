@@ -9,7 +9,9 @@ import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionA
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
 import { findInstanceAt, componentSize, collisionRadius } from '../src/models/hitTest.js';
 import { bumperAnchorsFor, applyBumperForces } from '../src/simulation/bumpers.js';
-import { isSolidLight, solidLightRadius, solidLightCircles, pushOutOfCircle, pushClearance } from '../src/models/solidBody.js';
+import { isSolidBody, solidBodyRadius, solidBodyCircles, pushOutOfCircle, pushClearance } from '../src/models/solidBody.js';
+import { defaultElementTemperature } from '../src/models/heatSource.js';
+import { formationPoses } from '../src/models/formation.js';
 import { drawWorld } from './worldDraw.js';
 import { renderWorldInspector } from './worldInspector.js';
 import { nextVehicleName, makePrototype, blankVehicle, removePrototype, nextVehicleColor } from './prototypes.js';
@@ -87,7 +89,9 @@ export class WorldSim {
    * single-player and shared worlds behave identically. Returns bots moved.
    */
   evictOverlappingBots() {
-    const circles = solidLightCircles(this.worldDoc.elements, this.state.configs);
+    // Every solid emitter, not just lamps: a furnace switched on on top of a parked robot
+    // would otherwise get the same Matter ejection this function exists to prevent.
+    const circles = solidBodyCircles(this.worldDoc.elements, this.state.configs);
     if (!circles.length) return 0;
     const clearance = pushClearance(this.state.configs);
     let moved = 0;
@@ -323,7 +327,12 @@ export class WorldSim {
       const v = this.vehicleFor(inst);
       if (!v) continue; // proto removed mid-run: skip rather than crash the loop
       const pose = { x: inst.body.position.x, y: inst.body.position.y, angle: inst.body.angle };
-      const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.state.configs.sensors);
+      const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.state.configs.sensors, {
+        // Thermal mass needs a timestep to lag against; the fixed dt (not the scaled wall
+        // clock) is what the physics itself advances by, so heat stays identical at any Time.
+        sensorStates: inst.sensorStates,
+        dtMs: this.dtMs,
+      });
       inst.lastSamples = samples;
       allSamples.push(...samples.map(s => ({ ...s, instanceId: inst.id })));
 
@@ -564,12 +573,12 @@ export class WorldSim {
     for (const el of this.worldDoc.elements) {
       const dx = w.x - el.position.x, dy = w.y - el.position.y;
       let r;
-      if (el.type === 'light') {
-        // A SOLID lamp is grabbable by its body. A soft one keeps the small handle it
+      if (el.type === 'light' || el.type === 'heat') {
+        // A SOLID emitter is grabbable by its body. A soft one keeps the small handle it
         // has always had: the glow is an order of magnitude larger than the lamp, so
         // letting it drive the hit radius would make the whole halo grab by accident.
-        r = isSolidLight(el, this.state?.configs)
-          ? Math.max(12, solidLightRadius(el, this.state?.configs))
+        r = isSolidBody(el, this.state?.configs)
+          ? Math.max(12, solidBodyRadius(el, this.state?.configs))
           : 10;
       } else if (el.primitive === 'circle') r = (el.properties?.radius ?? 10) * (el.scale?.x ?? 1);
       else r = Math.max(el.properties?.width ?? 20, el.properties?.height ?? 20) / 2;
@@ -605,6 +614,12 @@ export class WorldSim {
                                        clientY: this.canvas.getBoundingClientRect().top + this.canvas.clientHeight / 2 });
 
     this.ui.addLight.onclick = () => this.addElement({ type: 'light', primitive: 'circle', properties: { intensity: 3000 } }, mkEl());
+    // Default temperature comes from config/world.json (never a literal here), and the element
+    // is NOT solid by default — dropping a furnace on a robot should not shove it.
+    if (this.ui.addHeat) this.ui.addHeat.onclick = () => this.addElement({
+      type: 'heat', primitive: 'circle',
+      properties: { temperature: defaultElementTemperature(this.state?.configs) },
+    }, mkEl());
     this.ui.addRock.onclick = () => this.addElement({ type: 'rock', primitive: 'circle', properties: { radius: 40 } }, mkEl());
     this.ui.addWall.onclick = () => this.addElement({ type: 'obstacle', primitive: 'rect', properties: { width: 200, height: 24 } }, mkEl());
 
@@ -665,7 +680,7 @@ export class WorldSim {
     this.selectedElement = el.id;
     this.buildObstacles();
     // A solid lamp dropped on top of a running bot must nudge it out, not fling it.
-    if (isSolidLight(el, this.state.configs)) this.evictOverlappingBots();
+    if (isSolidBody(el, this.state.configs)) this.evictOverlappingBots();
     this.renderInspector();
     // Co-op (M5 p3): the host's canvas is the shared world — mirror the add out to joiners.
     this.hooks?.onElementChange?.({ op: 'add', element: el });
@@ -694,6 +709,8 @@ export class WorldSim {
         inst.body.angularVelocity = 0;
       }
       inst.path = []; // fresh trail after a reset
+      // ...and sensors cool back to ambient, or a reset robot resumes hot (see HeadlessWorld.reset).
+      inst.sensorStates?.clear();
       // Restore the initial mix: drop any propagated clone + bookkeeping.
       if (inst.vehicleOverride || inst.converted) hadPropagation = true;
       inst.vehicleOverride = null;
@@ -760,25 +777,13 @@ export class WorldSim {
     };
     if (act === 'here') {
       this.ensureCount(proto, proto.instances.length + 1, center);
-    } else if (act === 'random') {
-      const r = this.viewRadius();
-      proto.instances.forEach((_, i) => setSeed(i,
-        center.x + (Math.random() - 0.5) * 2 * r,
-        center.y + (Math.random() - 0.5) * 2 * r,
-        Math.random() * Math.PI * 2));
-      this.reset();
-    } else if (act === 'line') {
-      const n = proto.instances.length;
-      proto.instances.forEach((_, i) => setSeed(i, center.x + (i - (n - 1) / 2) * 130, center.y, 0));
-      this.reset();
-    } else if (act === 'grid') {
-      const n = proto.instances.length;
-      const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
-      const rows = Math.max(1, Math.ceil(n / cols));
-      proto.instances.forEach((_, i) => setSeed(i,
-        center.x + (i % cols - (cols - 1) / 2) * 130,
-        center.y + (Math.floor(i / cols) - (rows - 1) / 2) * 130,
-        0));
+    } else if (act === 'random' || act === 'line' || act === 'grid') {
+      // The layout lives in `models/formation.js`, shared with the co-op server's arrangeAll —
+      // so the fleet-organise buttons in the shared world and these per-prototype ones cannot
+      // drift into meaning different things. Same numbers as before the extraction:
+      // random spreads over the visible radius, line/grid use the 130px default spacing.
+      const poses = formationPoses(proto.instances.length, act, center, { spread: this.viewRadius() });
+      proto.instances.forEach((_, i) => setSeed(i, poses[i].x, poses[i].y, poses[i].rotation));
       this.reset();
     } else if (act === 'edit') {
       this.hooks.openEditor(proto);
@@ -812,7 +817,9 @@ export class WorldSim {
     for (let i = 0; i < insts.length; i++) {
       if (!existing[i]) {
         const seed = insts[i];
-        existing.push({ id: seed.id, protoId: proto.id, seed: { ...seed.position, rotation: seed.rotation }, body: null, path: [] });
+        // `sensorStates` is one robot's thermal memory (see evaluateVehicleSensors) — per
+        // instance, so clones of one design do not share a temperature.
+        existing.push({ id: seed.id, protoId: proto.id, seed: { ...seed.position, rotation: seed.rotation }, body: null, path: [], sensorStates: new Map() });
       } else {
         existing[i].seed = { x: insts[i].position.x, y: insts[i].position.y, rotation: insts[i].rotation };
       }

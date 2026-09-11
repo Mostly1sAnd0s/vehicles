@@ -2,12 +2,13 @@
  * World element inspector panel (extracted from WorldSim.renderInspector).
  */
 import {
-  isSolidLight,
-  authoredLightRadius,
-  lightConfig,
+  isSolidBody,
+  authoredBodyRadius,
+  bodyConfig,
   DEFAULT_LIGHT_MIN_RADIUS,
   DEFAULT_LIGHT_MAX_RADIUS,
 } from '../src/models/solidBody.js';
+import { heatElementRange } from '../src/models/heatSource.js';
 
 export function renderWorldInspector(sim) {
     const box = sim.ui.worldInspector;
@@ -76,29 +77,42 @@ export function renderWorldInspector(sim) {
     const ro = canEdit ? '' : 'disabled';
     box.style.display = 'block';
     const isLight = el.type === 'light';
+    const isHeat = el.type === 'heat';
+    // Both are EMITTERS: a circular source of a field, with an optional solid body. They
+    // share everything about their UI except the one property that defines the field —
+    // intensity for light, temperature for heat — which is why the solid/slider/rotation
+    // handling below is written once for both rather than duplicated.
+    const isEmitter = isLight || isHeat;
     // Imported world JSON can carry an element with no `properties` object at all.
     // The template below reads (and the handlers write) `el.properties.X` directly,
     // so materialise it once here — the same hardening the Bumper inspector needed.
     if (!el.properties || typeof el.properties !== 'object') el.properties = {};
-    // Solid-light controls: bounds come from config/world.json, never hard-coded.
+    // Solid-body + property bounds come from config/world.json per element TYPE (a lamp and a
+    // furnace need not agree), never hard-coded here.
     const cfg = sim.state?.configs;
-    const wcfg = lightConfig(cfg);
+    const wcfg = bodyConfig(cfg, el.type);
     const RMIN = wcfg.minRadius ?? DEFAULT_LIGHT_MIN_RADIUS;
     const RMAX = Math.max(RMIN, wcfg.maxRadius ?? DEFAULT_LIGHT_MAX_RADIUS);
-    const solid = isSolidLight(el, cfg);
-    const rShown = Math.round(authoredLightRadius(el, cfg));
+    const solid = isSolidBody(el, cfg);
+    const rShown = Math.round(authoredBodyRadius(el, cfg));
+    const [TMIN, TMAX] = heatElementRange(cfg);
     box.innerHTML = `
-      <h3 style="margin:0 0 6px">${isLight ? 'Light source' : 'Obstacle'}${canEdit ? '' : ' (read-only)'}</h3>
+      <h3 style="margin:0 0 6px">${isLight ? 'Light source' : isHeat ? 'Heat source' : 'Obstacle'}${canEdit ? '' : ' (read-only)'}</h3>
       <label>X <input type="number" id="wi-x" value="${Math.round(el.position.x)}" ${ro}></label>
       <label>Y <input type="number" id="wi-y" value="${Math.round(el.position.y)}" ${ro}></label>
-      ${isLight ? '' : `<label>Rot° <input type="number" id="wi-rot" step="5" value="${Math.round((el.rotation ?? 0) * 180 / Math.PI)}" ${ro}></label>`}
+      ${isEmitter ? '' : `<label>Rot° <input type="number" id="wi-rot" step="5" value="${Math.round((el.rotation ?? 0) * 180 / Math.PI)}" ${ro}></label>`}
       <label>Scale <input type="number" id="wi-scale" step="0.1" value="${el.scale?.x ?? 1}" ${ro}></label>
       ${isLight
         ? `<label>Intensity <input type="number" id="wi-int" step="100" value="${el.properties.intensity ?? 1}" ${ro}></label>
            <label class="check"><input type="checkbox" id="wi-solid"${solid ? ' checked' : ''} ${ro}> Solid body (vehicles bump into it)</label>
            ${solid ? `<label>Body radius <input type="range" id="wi-sradius" min="${RMIN}" max="${RMAX}" step="1" value="${rShown}" ${ro}> <span id="wi-sradius-v">${rShown}</span></label>
              <div class="tip-box">The ring drawn on the lamp IS this radius — the barrier and the picture are the same number. Light sensing is unaffected.</div>` : ''}`
-        : el.primitive === 'circle'
+        : isHeat
+          ? `<label>Temperature <input type="number" id="wi-temp" min="${TMIN}" max="${TMAX}" step="10" value="${el.properties.temperature ?? TMIN}" ${ro}> °C</label>
+             <label class="check"><input type="checkbox" id="wi-solid"${solid ? ' checked' : ''} ${ro}> Solid body (vehicles bump into it)</label>
+             ${solid ? `<label>Body radius <input type="range" id="wi-sradius" min="${RMIN}" max="${RMAX}" step="1" value="${rShown}" ${ro}> <span id="wi-sradius-v">${rShown}</span></label>` : ''}
+             <div class="tip-box">Radiates heat (&prop; T⁴, inverse-square) — invisible to light sensors. Below room temperature it is a cold SINK. ${solid ? 'The ring IS the barrier.' : 'Not solid: robots drive straight through the fire.'}</div>`
+          : el.primitive === 'circle'
           ? `<label>Radius <input type="number" id="wi-rad" value="${el.properties.radius ?? 10}" ${ro}></label>`
           : `<label>Width <input type="number" id="wi-w" value="${el.properties.width ?? 20}" ${ro}></label>
              <label>Height <input type="number" id="wi-h" value="${el.properties.height ?? 20}" ${ro}></label>`}
@@ -116,6 +130,14 @@ export function renderWorldInspector(sim) {
     bind('wi-rot', v => { el.rotation = v * Math.PI / 180; syncPatch({ rotation: el.rotation }); });
     bind('wi-scale', v => { el.scale.x = v; el.scale.y = v; syncPatch({ scale: { x: v, y: v } }); });
     bind('wi-int', v => { el.properties.intensity = v; syncPatch({ properties: { intensity: v } }); });
+    // Temperature is clamped on the way IN as well as on the way OUT (the snapshot sanitises
+    // too): the seam has to survive hand-written JSON, but the UI should never offer a value
+    // it then silently changes on you.
+    bind('wi-temp', v => {
+      const n = Number.isFinite(v) ? Math.min(TMAX, Math.max(TMIN, v)) : TMIN;
+      el.properties.temperature = n;
+      syncPatch({ properties: { temperature: n } });
+    });
     bind('wi-rad', v => { el.properties.radius = v; syncPatch({ properties: { radius: v } }); });
     bind('wi-w', v => { el.properties.width = v; syncPatch({ properties: { width: v } }); });
     bind('wi-h', v => { el.properties.height = v; syncPatch({ properties: { height: v } }); });
@@ -130,7 +152,7 @@ export function renderWorldInspector(sim) {
         // Materialise the radius on the way IN so the element is self-describing and
         // round-trips through JSON import / the co-op wire with its size intact.
         if (on && !Number.isFinite(Number(el.properties.radius))) {
-          el.properties.radius = authoredLightRadius(el, cfg);
+          el.properties.radius = authoredBodyRadius(el, cfg);
         }
         sim.buildObstacles();
         // Nudge (don't fling) any bot the new barrier landed on top of, before the
@@ -147,7 +169,7 @@ export function renderWorldInspector(sim) {
       // body with NaN inertia, which poisons the whole world, not just this lamp.
       const clamp = v => {
         const n = Number(v);
-        if (!Number.isFinite(n)) return authoredLightRadius(el, cfg);
+        if (!Number.isFinite(n)) return authoredBodyRadius(el, cfg);
         return Math.min(RMAX, Math.max(RMIN, Math.round(n)));
       };
       // `input` repaints live (ring + barrier together, no wire traffic); `change`

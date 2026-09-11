@@ -42,6 +42,16 @@
       "defaults": { "modelRef": "sensors.json#light", "range": 300, "aimAngle": 0, "fov": 6.283185307179586 }
     },
     {
+      "id": "heat_sensor",
+      "name": "Heat Sensor",
+      "category": "sensor",
+      "mass": 0.5,
+      "size": 8,
+      "shape": "circle",
+      "ports": [{ "id": "out", "kind": "sensor_output" }],
+      "defaults": { "modelRef": "sensors.json#heat", "range": 400, "aimAngle": 0, "fov": 6.283185307179586, "sensitivity": 1 }
+    },
+    {
       "id": "distance_sensor",
       "name": "Distance Sensor",
       "category": "sensor",

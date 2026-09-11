@@ -151,6 +151,7 @@ async function main() {
     if (worldSim) return;
     worldSim = new WorldSim($('world-canvas'), {
       addLight: $('add-light'),
+      addHeat: $('add-heat'),
       addRock: $('add-rock'),
       addWall: $('add-wall'),
       btnPlay: $('btn-play'),
@@ -230,7 +231,12 @@ async function main() {
     invite: $('coop-invite'), inviteRow: $('coop-invite-row'), inviteAlt: $('coop-invite-alt'),
     copyInvite: $('coop-copy'),
     remoteFleet: $('remote-fleet'),
+    arrange: $('coop-arrange'), arrangeRandom: $('coop-arrange-random'),
+    arrangeLine: $('coop-arrange-line'), arrangeGrid: $('coop-arrange-grid'),
   }, {
+    // Fleet layouts centre on the host's camera, so bots gather where they are LOOKING (the same
+    // feel as the Sandbox buttons) instead of at an invisible world origin.
+    getViewCenter: () => (worldSim?.view ? { x: worldSim.view.x, y: worldSim.view.y } : null),
     // An invite link (`#join=CODE`) connects without a click, so bring the World view up first —
     // otherwise you would join a shared world you cannot see.
     onDeepLink: () => { activate('world'); initWorldSim(); },

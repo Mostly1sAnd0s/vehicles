@@ -18,6 +18,14 @@ export const DEFAULT_LIGHT_MIN_RADIUS = 8;
 export const DEFAULT_LIGHT_MAX_RADIUS = 240;
 
 /**
+ * Element types that can carry a static collision body. Emitter types: both radiate a
+ * field (light, heat) AND can, when `solid` is on, block a robot. The rule that made the
+ * Bumper trustworthy carries across unchanged — ONE number is the drawn ring, the readout
+ * and the physics radius, for every type in this set.
+ */
+export const SOLID_BODY_TYPES = new Set(['light', 'heat']);
+
+/**
  * A number, or nothing. Accepts real numbers and non-empty numeric strings (HTML
  * inputs hand back strings) and rejects everything else — notably `[]` and `''`,
  * which `Number()` happily coerces to 0. A silently-zeroed radius would build a
@@ -40,6 +48,18 @@ export function lightConfig(configs) {
 }
 
 /**
+ * The config slice for a solid-capable element, chosen by ITS OWN type — a heat source
+ * reads `world.heat`, a light reads `world.light`. Each emitter therefore has its own
+ * default radius and its own slider bounds (a lamp and a furnace need not agree), and an
+ * unknown type falls back to the light slice rather than throwing, because every reader
+ * here is optional-config-by-design.
+ */
+export function bodyConfig(configs, type) {
+  const c = configs?.world?.[type];
+  return c && typeof c === 'object' ? c : type === 'light' ? lightConfig(configs) : {};
+}
+
+/**
  * Is this element a solid light? Strict: real `true` or the hand-written-JSON
  * string `"true"`. Deliberately NOT general truthiness — `solid: 1` or `solid:
  * "on"` reads as a mistake, and a mistake must read as "not solid" rather than
@@ -56,17 +76,24 @@ export function isSolidLight(el, configs = {}) {
 }
 
 /**
+ * `isSolidLight` generalised to every emitter type (see SOLID_BODY_TYPES). Same strictness:
+ * only real `true` or the string `"true"` counts, the element's own value always beats the
+ * config default, and anything else reads as "not solid".
+ */
+export function isSolidBody(el, configs = {}) {
+  if (!el || !SOLID_BODY_TYPES.has(el.type)) return false;
+  const v = el.properties?.solid ?? bodyConfig(configs, el.type).solid ?? false;
+  return v === true || v === 'true';
+}
+
+/**
  * The AUTHORED (unscaled) radius — what the inspector's slider edits — clamped
  * into [minRadius, maxRadius] and defaulted. Kept separate from `solidLightRadius`
  * because a slider bound to the SCALED value would multiply by `el.scale` again on
  * every edit and creep the radius upward.
  */
 export function authoredLightRadius(el, configs = {}) {
-  const cfg = lightConfig(configs);
-  const min = finite(cfg.minRadius, DEFAULT_LIGHT_MIN_RADIUS);
-  const max = Math.max(min, finite(cfg.maxRadius, DEFAULT_LIGHT_MAX_RADIUS));
-  const authored = finite(el?.properties?.radius, finite(cfg.radius, DEFAULT_LIGHT_RADIUS));
-  return Math.min(max, Math.max(min, authored));
+  return authoredBodyRadiusFrom(lightConfig(configs), el);
 }
 
 /**
@@ -83,6 +110,25 @@ export function solidLightRadius(el, configs = {}) {
   return Math.max(0.1, authoredLightRadius(el, configs) * scale);
 }
 
+/** Shared clamp: authored radius bounded by the type's own config, then scaled by el.scale.x. */
+function authoredBodyRadiusFrom(cfg, el) {
+  const min = finite(cfg.minRadius, DEFAULT_LIGHT_MIN_RADIUS);
+  const max = Math.max(min, finite(cfg.maxRadius, DEFAULT_LIGHT_MAX_RADIUS));
+  const authored = finite(el?.properties?.radius, finite(cfg.radius, DEFAULT_LIGHT_RADIUS));
+  return Math.min(max, Math.max(min, authored));
+}
+
+/** The unscaled, clamped radius for any solid-capable element (what its slider edits). */
+export function authoredBodyRadius(el, configs = {}) {
+  return authoredBodyRadiusFrom(bodyConfig(configs, el?.type), el);
+}
+
+/** Collision radius in world px for any solid-capable element (clamp, then apply scale). */
+export function solidBodyRadius(el, configs = {}) {
+  const scale = Math.max(1e-6, finite(el?.scale?.x, 1));
+  return Math.max(0.1, authoredBodyRadius(el, configs) * scale);
+}
+
 /**
  * Every solid light in an element list as a plain { id, x, y, r } circle.
  * Lets an engine (either one) sweep its bots without re-deriving the geometry.
@@ -96,9 +142,31 @@ export function solidLightCircles(elements, configs) {
   return out;
 }
 
+/**
+ * Every solid body in an element list, of ANY emitter type. Engines use THIS one for
+ * eviction — a lights-only sweep would let a furnace be switched on inside a parked robot
+ * and let Matter fling it, which is exactly the failure `pushOutOfCircle` exists to prevent.
+ */
+export function solidBodyCircles(elements, configs) {
+  const out = [];
+  for (const el of elements ?? []) {
+    if (!isSolidBody(el, configs) || !el.position) continue;
+    out.push({ id: el.id, x: el.position.x, y: el.position.y, r: solidBodyRadius(el, configs) });
+  }
+  return out;
+}
+
 /** Configured clearance to leave between a lamp's barrier and an evicted bot. */
 export function pushClearance(configs) {
   return Math.max(0, finite(lightConfig(configs).pushClearance, 6));
+}
+
+/** Same clearance, read from the element's own type slice (falls back to the light's). */
+export function bodyPushClearance(configs, type = 'light') {
+  const cfg = bodyConfig(configs, type);
+  const own = finite(cfg.pushClearance, NaN);
+  if (Number.isFinite(own)) return Math.max(0, own);
+  return pushClearance(configs);
 }
 
 /**

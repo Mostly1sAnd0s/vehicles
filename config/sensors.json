@@ -8,6 +8,19 @@
     "fullScaleRatio": 16,
     "fov": 6.283185307179586
   },
+  "heat": {
+    "model": "radiant-lumped-capacitance",
+    "defaultRange": 600,
+    "fov": 6.283185307179586,
+    "ambientTemp": 20,
+    "referenceDistance": 100,
+    "radiationConstant": 1,
+    "coupling": 0.5,
+    "timeConstantMs": 400,
+    "minDistance": 12,
+    "outputSpanC": 40,
+    "showBeam": true
+  },
   "distance": {
     "model": "raycast",
     "defaultRange": 150,

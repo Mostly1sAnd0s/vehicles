@@ -47,14 +47,17 @@ export class CoopPanel {
   /**
    * @param {object} ui element map: {hostAddr, advanced, advancedTag, hostAddrHint, name, row, host,
    *                                   join, joinCode, disconnect, code, status, deploy, invite,
-   *                                   inviteRow, inviteAlt, copyInvite, remoteFleet}
-   * @param {{client?:CoopClient, getVehicle?:(()=>object), onDeepLink?:(()=>void)}} [opts]
+   *                                   inviteRow, inviteAlt, copyInvite, remoteFleet,
+   *                                   arrange, arrangeRandom, arrangeLine, arrangeGrid}
+   * @param {{client?:CoopClient, getVehicle?:(()=>object), onDeepLink?:(()=>void),
+   *           getViewCenter?:(()=>{x:number,y:number}|null)}} [opts]
    */
-  constructor(ui, { client, getVehicle, onEditDesign, onConnectStart, onDisconnectStart, onDeepLink } = {}) {
+  constructor(ui, { client, getVehicle, onEditDesign, onConnectStart, onDisconnectStart, onDeepLink, getViewCenter } = {}) {
     // Fail fast with the missing element's name rather than a cryptic null error mid-constructor.
     for (const [k] of Object.entries(ui)) if (!ui[k]) throw new Error('CoopPanel: missing UI element "' + k + '"');
     this.ui = ui;
     this.getVehicle = getVehicle;
+    this.getViewCenter = getViewCenter;
     this.onEditDesign = onEditDesign;
     // Mode-transition lifecycle hooks (main.js owns the canvas overlay + Sandbox tab state):
     // onConnectStart fires when Host/Join is pressed; onDisconnectStart when Disconnect is.
@@ -101,6 +104,16 @@ export class CoopPanel {
       // main.js owns the editor: it loads THIS participant's co-op design into the editor.
       this.onEditDesign?.();
     });
+
+    // Fleet organising: one command per layout, aimed at the host's camera centre. The server
+    // is the authority on who may send this (participants are refused); the row is merely
+    // hidden from them so they are not invited to be told no.
+    for (const [btn, mode] of [[this.ui.arrangeRandom, 'random'], [this.ui.arrangeLine, 'line'], [this.ui.arrangeGrid, 'grid']]) {
+      btn.addEventListener('click', () => {
+        const c = this.getViewCenter?.() ?? null;
+        this.client.arrangeBots(mode, c);
+      });
+    }
 
 
     // Shared-fleet management (phase 4): −/+/✕ map to setCount; host-only, and the server enforces it.
@@ -452,6 +465,9 @@ export class CoopPanel {
     }
     const ts = document.getElementById('timescale-label');
     if (ts) ts.hidden = hide;
+    // Fleet layouts move OTHER people's bots, so they are host-only — and hidden entirely
+    // outside a connected world, where there is no shared population to arrange.
+    if (this.ui.arrange) this.ui.arrange.hidden = !this._wasConnected || hide;
   }
 
   setBusy(busy) { for (const el of [this.ui.host, this.ui.join, this.ui.disconnect]) if (el) el.disabled = busy; }

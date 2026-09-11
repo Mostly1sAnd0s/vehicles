@@ -12,10 +12,13 @@
  *   - The client that HOSTS a world becomes its **admin** who runs the session.
  *   - **deploy** is owner-only, enforced by construction: a deploy message carries no protoId, so a
  *     participant can only ever push their own bot. The server also drops any malformed/unknown one.
- *   - **setCount** and **controls** (start/pause/reset) are admin-only.
+ *   - **setCount**, **controls** (start/pause/reset) and **arrangeBots** (the shared fleet
+ *     layouts) are admin-only. `arrangeBots` is the one command that acts on bots it does not
+ *     own — deliberately, because its whole purpose is organising the world as a place.
  */
 import { HeadlessWorld } from './simulation/worldSim.js';
-import { isSolidLight } from './models/solidBody.js';
+import { isSolidBody } from './models/solidBody.js';
+import { isFormationMode } from './models/formation.js';
 
 const DEFAULT_COUNT = 1; // clones a participant gets on their first deploy
 
@@ -125,6 +128,7 @@ export class Session {
       case 'updateElement': reply = this._updateElement(p, msg); break;
       case 'removeElement': reply = this._removeElement(p, msg); break;
       case 'moveBot':       reply = this._moveBot(p, msg); break;
+      case 'arrangeBots':   reply = this._arrangeBots(p, msg); break;
       default:         reply = { type: 'error', error: `unknown message type: ${msg?.type}` };
     }
     // Errors are private feedback to the actor; world-affecting successes already broadcast themselves.
@@ -217,7 +221,7 @@ export class Session {
     this.world.rebuildObstacles();
     // A solid lamp added on top of a running bot would otherwise fling it (see
     // HeadlessWorld.evictOverlappingBots). Only the ON-transition evicts.
-    if (isSolidLight(el, this.world.configs)) this.world.evictOverlappingBots();
+    if (isSolidBody(el, this.world.configs)) this.world.evictOverlappingBots();
     const res = { type: 'elementAdded', id: el.id, count: this._sharedElements().length };
     this._sendTo(p.token, res); // ack so the host learns the assigned id (handle() only echoes errors)
     this.broadcast({ type: 'elements', elements: this._elementsWire() }); // everyone (incl. sender; admin UI ignores its own echo)
@@ -248,6 +252,44 @@ export class Session {
     this._sendTo(p.token, res);
     // Authoritative pose: broadcast an immediate snapshot so every client (incl. the host's own
     // other windows) sees the bot land without waiting for the next ~15Hz tick.
+    this.broadcast(this.currentSnapshotWire());
+    return res;
+  }
+
+  /**
+   * Host arranges EVERY bot in the shared world into a formation. Admin-only, like the other
+   * world-shaping commands: it moves other people's bots, which is precisely why a participant
+   * must not be able to send it (the UI hides the buttons for them, but the session is the gate).
+   *
+   * The centre arrives from the host's camera so the fleet lands where the host is looking —
+   * the same mental model as the single-player buttons — and is validated rather than clamped:
+   * a NaN position handed to Matter does not stay on one body, it propagates to everything that
+   * body then touches, and the world becomes unrecoverable without a reload.
+   *
+   * The reply is broadcast (so joiners can react to their bots moving under them) followed by an
+   * authoritative snapshot, so the new layout is on every screen immediately rather than on the
+   * next ~15 Hz tick — and if the sim is paused it is correct even though nothing is stepping.
+   */
+  _arrangeBots(p, msg) {
+    if (p.role !== 'admin') return { type: 'error', error: 'only the host arranges the shared fleet' };
+    const mode = msg?.mode;
+    if (!isFormationMode(mode)) return { type: 'error', error: `unknown formation: ${JSON.stringify(mode ?? null)} (want random, line or grid)` };
+    let center = null;
+    if (msg?.center !== undefined && msg?.center !== null) {
+      const cx = Number(msg.center?.x), cy = Number(msg.center?.y);
+      if (!Number.isFinite(cx) || !Number.isFinite(cy)) return { type: 'error', error: 'arrangeBots needs a finite centre {x,y}' };
+      center = { x: cx, y: cy };
+    }
+    const count = this.world.arrangeAll(mode, center);
+    if (count === null) return { type: 'error', error: `unknown formation: ${mode}` };
+    this.stats.adminCommands++;
+    // ONE broadcast, not an ack plus a broadcast: `broadcast` already includes the sender, so
+    // sending both would hand the host the same event twice (and a UI that toasts or replays it
+    // would do it twice). The other world commands get an ack because their ack is a DIFFERENT
+    // message from the broadcast — `elementAdded` vs `elements`, `botMoved` vs `snapshot` —
+    // whereas here they are the same fact to the same audience.
+    const res = { type: 'botsArranged', mode, count };
+    this.broadcast(res);
     this.broadcast(this.currentSnapshotWire());
     return res;
   }
@@ -297,7 +339,7 @@ export class Session {
     if (bad >= 0) return { type: 'error', error: `setElements: element ${bad} needs a type and a finite position` };
     this.world.worldDoc.elements = structuredClone(els);
     this.world.rebuildObstacles();
-    if (els.some(e => isSolidLight(e, this.world.configs))) this.world.evictOverlappingBots();
+    if (els.some(e => isSolidBody(e, this.world.configs))) this.world.evictOverlappingBots();
     const res = { type: 'elementsSet', count: els.length };
     this._sendTo(p.token, res);
     this.broadcast({ type: 'elements', elements: this._elementsWire() });

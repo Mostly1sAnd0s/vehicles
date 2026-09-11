@@ -22,7 +22,8 @@ The system is client-side only with manual JSON import/export for sharing. No se
 * Wiring remains editable after vehicle creation
 * World simulation with full 2D physics, primitive obstacles and light sources
 * Realistic sensors: inverse-square light falloff, raycast distance/proximity with toggleable beam visualization
-* World elements editable in World view: position, rotation, scale *(and, as of M8,
+* World elements editable in World view: position, rotation, scale, and emitter properties —
+  light intensity and, from M9, a heat source's temperature *(and, as of M8,
   a light's solidity + collision radius)*
 * World and vehicle save/load as JSON
 * Vehicle instances list with prototype editing propagation. Instance count controlled via slider/integer
@@ -1157,3 +1158,121 @@ directory. Check `curl http://127.0.0.1:<cdp>/json` and who owns the web port be
 believing either result. `smoke:solid` now frees its CDP port and verifies a `?nc=` nonce
 on the page it attaches to; the other probes still rely on a fixed profile+port and could
 use the same treatment.
+
+---
+
+## M9 — Heat source + heat sensor, and co-op fleet organising
+
+Two features delivered together: a second emitter type with genuinely different physics, and
+the fleet-layout controls lifted into the shared world.
+
+### M9.1 Heat: a thermal field, not a re-skinned light sensor
+
+Design, model choice and limits are written up in `docs/heat-plan.md`. As built:
+
+* **Two separate fields.** `worldElementsToSnapshot` now emits `heats:[{x,y,temperatureC}]`
+  beside `lights`. A light sensor is handed `lights`, a heat sensor `heats`, so "a furnace is
+  invisible to phototaxis" is a property of the data flow. Pinned at unit level and in the
+  browser (light readings bit-identical while a furnace goes 60 °C → 2000 °C).
+* **The physics** (`src/sensors/heat.js`): net Stefan–Boltzmann emission in **kelvin**
+  `k·((Ts/Ta)⁴ − 1)`; inverse-square propagation about a **calibration radius**; optional
+  Beer–Lambert air absorption; FOV gating shared with light via `inFov`; optional obstacle
+  shadowing (off by default). The sensor itself is a lumped heat-capacitance body —
+  `C·dT/dt = Σ αF_iσ(T_s,i⁴ − T⁴) − h(T − T_amb)`, whose steady state is a conductance-weighted
+  **mean** `T_eq = (Σ Ĝ_i·T_s,i + T_amb)/(Σ Ĝ_i + 1)`, integrated **exactly** in `τ`.
+* **Exact integration is not decoration.** A naive Euler step is frame-rate dependent: one
+  `dt=τ` gives 63.2 %, two `dt=τ/2` steps give 75 %, so 30 fps and 60 fps would disagree about
+  how hot the world is, and `dt > τ` oscillates (reachable with the Time slider). The test
+  suite asserts subdivision consistency (100 tiny steps land exactly on one big step) and
+  non-overshoot at `dt = 2.5τ`.
+* **Sensor state is per instance.** Heat is the first sensor in this codebase with a past.
+  `evaluateVehicleSensors` gained an optional 4th arg `{sensorStates, dtMs}`; it cannot live on
+  `vehicle` because both engines pass a fresh `{...v, pose}` every tick, so each engine owns a
+  `Map` per instance. **Reset clears it** (a reset robot must not resume hot) and **removed
+  components are pruned** (component ids are stable per design and shared across clones, so a
+  dead sensor's heat would boot its replacement hot).
+* **Solidity is shared, not copied.** `solidBody.js` generalised from lights to
+  `SOLID_BODY_TYPES = {light, heat}`: same strict `true`-only reading, same per-type config
+  bounds, same ring-equals-barrier identity, same eviction. `isSolidLight` et al. remain as
+  thin wrappers so nothing that already used them changed.
+
+#### Deviations and bugs found on the way (each now pinned by a test)
+* **The probe could read hotter than its source (found by a player: 4800 °C off a 220 °C
+  furnace).** The equilibrium was `T_ambient + coupling·flux` — a textbook lumped-capacitance
+  form, and unphysical here, because incident flux diverges as the probe closes on a source
+  (1/r²) while the probe's own reradiation was modelled as independent of it. Flux is not
+  heat: a passive probe cannot exceed the hottest body in view. Fixed by linearising the
+  exchange properly (`σ(T_s⁴−T⁴) ≈ (T_s²+T_a²)(T_s+T_a)(T_s−T)`), which makes the steady state
+  a conductance-weighted MEAN with the ceiling built in — 218 °C parked on a 220 °C furnace,
+  at any distance, for any coupling, with any mix of sources. Deliberately NOT fixed with a
+  `clamp`, which would have deleted cold sinks (a probe beside a sub-ambient trap must read
+  BELOW ambient) and hidden the ceiling instead of explaining it. The `coupling` constant also
+  changed meaning (a °C-per-flux gain of 10 became a conductance ratio of 0.5), which is why
+  the calibration points are now asserted by name rather than implied. Pinned in
+  `tests/heat.test.js` (bound swept over temperature × distance × coupling) and in the browser
+  by `npm run smoke:heat` phase 8b — whose first version was itself wrong: it asserted a peak
+  bound while the probe was still cooling from the previous 1500 °C phase, and a cooling probe
+  reading above its surroundings is correct behaviour, not the bug. The phase now cold-soaks
+  first, and separately asserts the transient stays hot, so neither half can be "fixed" into
+  the other.
+* **The first calibration was unusable.** Written as `P/(4πr²)` a hot source at 100 px gave
+  ΔT ≈ 5e-5 °C — correct law, sensor never moved off ambient, and exactly the kind of bug that
+  reads as "the sensor is broken". Fixed by writing the inverse-square law about a
+  `referenceDistance`, which keeps the law and makes every constant interpretable.
+* **Two of my own test assertions were wrong, not the code.** (a) "two half-steps differ from
+  one full step" — false, exact exponential integration is subdivision-consistent; the test
+  was inverted to assert the real property plus the Euler contrast. (b) a ring-down tolerance
+  of 1e-6 against a 60 °C gap decaying for 5 s (answer: 2e-4). Both are worth recording
+  because each looked like a physics bug.
+* **Eviction swept only lights** (`solidLightCircles`), so a furnace switched on under a parked
+  robot would have been flung by Matter — the exact failure `pushOutOfCircle` exists to stop.
+  Engines moved to `solidBodyCircles`.
+* **Latent crash fixed**: `HeadlessWorld.evictOverlappingBots` fell back to `?? {}` for a
+  world with no elements, and `{}` is not iterable — eviction threw on precisely the empty
+  worlds most likely to be created first. Now `?? []`.
+* **A browser-only syntax error** (`a?.b = c` is not valid JS) broke the whole app boot while
+  all 385 unit tests passed — unit tests never load `public/app/world.js`. The smoke probe
+  caught it in seconds, which is the argument for the probes existing.
+* **The probe's own assumptions failed twice, informatively**: the sample car is *wired*, so it
+  drove away while "settling" (a moving probe always reads off-equilibrium); and `moveBot`
+  adopts the dropped pose as the seed, so using it to "drive bots away" before a Reset test
+  overwrote the very seeds under test. The Reset test now displaces bodies server-side.
+
+### M9.2 Co-op fleet organising (Random / Line Up / Grid for everyone)
+
+* **One layout module** `src/models/formation.js` serves both the existing per-prototype
+  Sandbox buttons and the new server-side `arrangeAll`, so the two cannot drift into meaning
+  different things. Numbers preserved exactly (130px spacing, random over the view radius).
+* **`arrangeAll` does three things per bot**: teleports the body, **zeroes its momentum** (a
+  bot at speed otherwise flies straight back out of the formation), and writes the **seed** —
+  plus the documented `proto.instances[i]` where it exists, so a saved world exports what the
+  screen showed. Bots are ordered **grouped by participant**, so each fleet owns one stretch
+  of the line instead of being scattered through it.
+* **`arrangeBots` is admin-only** — it moves other people's bots, which is precisely why a
+  participant must not send it. The UI hides the row for participants; the session is the
+  gate, and a participant calling it directly is refused with nothing moved (probed).
+* **A centre is validated, never clamped**: a NaN handed to Matter does not stay on one body.
+  With no centre the layout is built around the fleet's own **centroid**, so it does not
+  teleport the world to the origin.
+* **One broadcast, not an ack plus a broadcast** — `broadcast` already includes the sender, so
+  the first cut handed the host the same event twice (caught by a test that asserted "exactly
+  once"). Other commands legitimately send both because their ack is a *different* message from
+  the broadcast (`elementAdded` vs `elements`).
+* **Follows immediately even while paused**: the command broadcasts an authoritative snapshot
+  after the event, rather than waiting for a ~15 Hz tick that a paused world never sends.
+
+### Verified (M9)
+* Unit **422/422** = the previous 338, plus `heat` 34 (thermodynamics against closed forms,
+  including the never-hotter-than-the-source bound swept over temperature × distance ×
+  coupling),
+  `heatSensor` 20 (seam + engine lifecycle: blindness, lag, ring-down, per-instance state,
+  reset, solid furnace blocking a robot), `formation` 16, `coop.arrange` 14.
+* `smoke:heat` 12 phases and `smoke:arrange` 10 phases, both on dedicated web+CDP ports with
+  a unique profile and a freshness nonce.
+* No regressions: `editor.ui`, `world.tabs`, `coop.panel`, `coop.session`→`world.solidlight`,
+  `merged.serve`, `neurons.outputs` all green. `world.sim`, `proto.crud` and `coop.session`'s
+  BUG6 still fail exactly where clean `main` fails them — pre-existing sample-world
+  assumptions, unchanged by this work.
+* The suite's cache hazard bit again during this work (new JS + cached HTML, README
+  "Testing"), producing a confident false failure; recorded there so the next reader spends
+  thirty seconds on it instead of an hour.

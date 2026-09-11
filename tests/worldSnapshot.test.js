@@ -37,8 +37,12 @@ test('unknown primitives and types are ignored', () => {
   assert.deepEqual(snap.obstacles, []);
 });
 
+// The snapshot is three fields now: `lights`, `heats` and `obstacles`. A sensor reads exactly
+// one of the first two, which is what keeps a furnace invisible to a light sensor by
+// construction rather than by tuning — so the FULL shape is asserted, and a future field that
+// silently appears (or one of these disappearing) fails here first.
 test('empty element list yields empty snapshot', () => {
-  assert.deepEqual(worldElementsToSnapshot([]), { lights: [], obstacles: [] });
+  assert.deepEqual(worldElementsToSnapshot([]), { lights: [], heats: [], obstacles: [] });
 });
 
 // ---------------- solid light sources ----------------
@@ -105,7 +109,7 @@ test('a light made solid by config default still emits the obstacle', () => {
 
 test('an element with no position is skipped entirely, solid or not', () => {
   const snap = worldElementsToSnapshot([{ id: 'ghost', type: 'light', properties: { solid: true, radius: 20 } }]);
-  assert.deepEqual(snap, { lights: [], obstacles: [] });
+  assert.deepEqual(snap, { lights: [], heats: [], obstacles: [] });
 });
 
 test('lights and obstacles keep their independent order in the two arrays', () => {

@@ -182,6 +182,18 @@ export class CoopClient {
     return this._send(m);
   }
 
+  /**
+   * Fleet organise (host-only): arrange EVERY bot in the shared world, not just this
+   * client's own. `center` is the host's camera centre so the fleet lands where they are
+   * looking; omit it and the server lays them out around the bots' own centroid.
+   * @param {'random'|'line'|'grid'} mode
+   */
+  arrangeBots(mode, center) {
+    const m = { type: 'arrangeBots', mode };
+    if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) m.center = { x: center.x, y: center.y };
+    return this._send(m);
+  }
+
   _send(msg) { if (this.ws && this.status === 'connected') this.ws.send(JSON.stringify(msg)); return this; }
 
   close() { const ws = this.ws; this.ws = null; try { ws?.close(); } catch {} this.status = 'closed'; }

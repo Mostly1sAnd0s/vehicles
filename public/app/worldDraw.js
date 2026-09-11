@@ -4,7 +4,8 @@
  */
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { componentSize } from '../src/models/hitTest.js';
-import { isSolidLight, solidLightRadius } from '../src/models/solidBody.js';
+import { isSolidBody, solidBodyRadius } from '../src/models/solidBody.js';
+import { heatSourceColor, elementAmbientC } from '../src/models/heatSource.js';
 import { hexToRgba, lightenHex, DEFAULT_BODY_COLOR } from './color.js';
 
 export function drawWorld(sim) {
@@ -41,15 +42,46 @@ export function drawWorld(sim) {
       ctx.fill();
     }
 
-    // SOLID lights: a real object a vehicle can bump into. Drawn after the glow so
-    // the ring is not washed out, and at `solidLightRadius()` — the SAME pure
-    // function the snapshot handed the physics engine — so the ring IS the barrier
-    // and the two can never drift apart. Same idiom as a Bumper: an outline ring
-    // reads as a barrier rather than a solid mount. Not gated by the Beams toggle:
-    // the barrier is there whether the sim is running or paused.
+    // HEAT sources: a thermal field, drawn warm (or cool blue for a cold sink) so a furnace
+    // never reads as a lamp. The glow is decoration; the SOLID ring below is the barrier, and
+    // the temperature label is the number the physics actually used. Colour comes from
+    // heatSourceColor() — the same ramp the editor uses, so "hot" looks the same everywhere.
+    for (const h of snap.heats) {
+      const ambient = elementAmbientC(sim.state?.configs);
+      const temp = Number.isFinite(h.temperatureC) ? h.temperatureC : ambient;
+      const color = heatSourceColor(temp, sim.state?.configs);
+      // Glow radius grows with how far above (or below) ambient it is — a 25 °C radiator is
+      // nearly invisible, a 900 °C one floods the screen. sqrt so the scale stays readable.
+      const strength = Math.sqrt(Math.abs(temp - ambient) / 100);
+      const r = Math.max(26, 34 * strength);
+      const rgb = color.match(/\d+/g) ?? [255, 120, 60];
+      const g = ctx.createRadialGradient(h.x, h.y, 2, h.x, h.y, r * 2.2);
+      g.addColorStop(0, `rgba(${rgb.join(',')},.9)`);
+      g.addColorStop(0.3, `rgba(${rgb.join(',')},.28)`);
+      g.addColorStop(1, `rgba(${rgb.join(',')},0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, r * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, Math.max(5, r * 0.32), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${Math.round(temp)}\u00b0C`, h.x, h.y - Math.max(9, r * 0.45));
+      ctx.textAlign = 'left';
+    }
+
+    // SOLID emitters (lamp or furnace): a real object a vehicle can bump into. Drawn after the
+    // glow so the ring is not washed out, and at `solidBodyRadius()` — the SAME pure function
+    // the snapshot handed the physics engine — so the ring IS the barrier and the two can never
+    // drift apart. Same idiom as a Bumper: an outline ring reads as a barrier rather than a
+    // solid mount. Not gated by the Beams toggle: the barrier is there whether sim or paused.
     for (const el of sim.worldDoc.elements ?? []) {
-      if (!isSolidLight(el, sim.state?.configs)) continue;
-      const R = solidLightRadius(el, sim.state?.configs);
+      if (!isSolidBody(el, sim.state?.configs)) continue;
+      const R = solidBodyRadius(el, sim.state?.configs);
       const x = el.position.x, y = el.position.y;
       ctx.beginPath();
       ctx.arc(x, y, R, 0, Math.PI * 2);
@@ -185,7 +217,12 @@ export function drawWorld(sim) {
           const p = toWorld(comp.local);
           let txt;
           let col = '#ffd479';
-          if (comp.type.startsWith('light') && s.lightLevel !== undefined) {
+          if (s.kind === 'heat') {
+            // The probe's OWN temperature and what that maps to, so a lagging reading is
+            // visible as what it is: still climbing, not stuck.
+            txt = `H ${Math.round(s.heatTemperatureC)}\u00b0C\u2192${s.value.toFixed(2)}`;
+            col = s.heatTemperatureC > (s.ambientC ?? 20) + 2 ? '#ff9c5a' : '#8fb8ff';
+          } else if (comp.type.startsWith('light') && s.lightLevel !== undefined) {
             const dTxt = s.lightDistance != null ? ` d\u2248${Math.round(s.lightDistance)}` : '';
             txt = `L ${s.lightLevel.toFixed(2)}\u2192${s.value.toFixed(2)}${dTxt}`;
           } else if (comp.type === 'vehicle_detection_sensor') {
@@ -251,10 +288,17 @@ export function drawWorld(sim) {
           }
           continue;
         }
-        const isLight = s.effectiveRange !== undefined;
+        // Light AND heat sensors are the same picture — an aperture-equals-FOV wedge whose
+        // length is the sensor's TRUE reach — so they share one branch and differ only in hue
+        // and in which level field drives the brightness. (Keyed on `kind`, because a heat
+        // sample also carries `effectiveRange`; testing that field alone would silently paint
+        // every heat sensor amber and call it a day.)
+        const isHeat = s.kind === 'heat';
+        const isWedge = isHeat || s.effectiveRange !== undefined;
+        const wedgeRgb = isHeat ? '255,110,55' : '255,180,90';
         let length;
         let level;
-        if (isLight) {
+        if (isWedge) {
           // Light sensor: a wedge (triangle) whose aperture IS the sensor FOV
           // and whose length IS its sensitivity. Brightness tracks the detected
           // light level; when no light is in view it still shows the FOV shape
@@ -266,13 +310,13 @@ export function drawWorld(sim) {
           // wasn't — real sensing begins at this radius. When nothing is within
           // range we just mark the sensor's position with a small dot.
           const fov = (s.fov === undefined || !Number.isFinite(s.fov)) ? 2 * Math.PI : s.fov;
-          const lvl = Math.min(Math.max(s.lightLevel ?? 0, 0), 1);
+          const lvl = Math.min(Math.max((isHeat ? s.heatLevel : s.lightLevel) ?? 0, 0), 1);
           const reach = s.effectiveRange ?? 0;
           const sx = s.samplePoint.x, sy = s.samplePoint.y;
           if (reach <= 0) {
             ctx.beginPath();
             ctx.arc(sx, sy, 3, 0, 2 * Math.PI);
-            ctx.strokeStyle = 'rgba(255,180,90,0.25)';
+            ctx.strokeStyle = `rgba(${wedgeRgb},0.25)`;
             ctx.lineWidth = 1;
             ctx.stroke();
             continue;
@@ -289,9 +333,9 @@ export function drawWorld(sim) {
             ctx.arc(sx, sy, reach, a1, a2); // edge -> arc -> other edge = wedge
           }
           ctx.closePath();
-          ctx.fillStyle = `rgba(255,180,90,${(alpha * 0.22).toFixed(3)})`;
+          ctx.fillStyle = `rgba(${wedgeRgb},${(alpha * 0.22).toFixed(3)})`;
           ctx.fill();
-          ctx.strokeStyle = `rgba(255,180,90,${alpha.toFixed(3)})`;
+          ctx.strokeStyle = `rgba(${wedgeRgb},${alpha.toFixed(3)})`;
           ctx.lineWidth = 1 + 1.5 * lvl;
           ctx.stroke();
           continue;

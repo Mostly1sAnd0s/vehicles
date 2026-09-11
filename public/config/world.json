@@ -6,5 +6,15 @@
     "minRadius": 8,
     "maxRadius": 240,
     "pushClearance": 6
+  },
+  "heat": {
+    "solid": false,
+    "radius": 28,
+    "minRadius": 8,
+    "maxRadius": 240,
+    "pushClearance": 6,
+    "temperature": 220,
+    "minTemperature": -50,
+    "maxTemperature": 1500
   }
 }

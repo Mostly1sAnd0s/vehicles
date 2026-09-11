@@ -15,7 +15,8 @@ import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionA
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from './logic.js';
 import { collisionRadius } from '../models/hitTest.js';
 import { bumperAnchorsFor, applyBumperForces } from './bumpers.js';
-import { solidLightCircles, pushOutOfCircle, pushClearance } from '../models/solidBody.js';
+import { solidBodyCircles, pushOutOfCircle, pushClearance } from '../models/solidBody.js';
+import { formationPoses, centroid } from '../models/formation.js';
 
 const clone = v => JSON.parse(JSON.stringify(v));
 const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -95,7 +96,10 @@ export class HeadlessWorld {
    * Returns the number of bots moved.
    */
   evictOverlappingBots() {
-    const circles = solidLightCircles(this.worldDoc.elements ?? {}, this.configs);
+    // `?? []`, not `?? {}`: a worldDoc with no elements at all used to fall back to an object,
+    // which is not iterable — the eviction sweep threw on exactly the empty worlds most likely
+    // to be built. And it sweeps EVERY solid emitter (lamp or furnace), not just lamps.
+    const circles = solidBodyCircles(this.worldDoc.elements ?? [], this.configs);
     if (!circles.length) return 0;
     const clearance = pushClearance(this.configs);
     let moved = 0;
@@ -134,7 +138,10 @@ export class HeadlessWorld {
   addInstance({ id, protoId, seed = { x: 0, y: 0, rotation: 0 }, owner }) {
     const v = this.prototypeVehicle(protoId);
     if (!v) return null;
-    const inst = { id, protoId, owner, seed: { ...seed }, body: null, wireMap: this._wireMap(v), lastSamples: [], lastMotors: [] };
+    // `sensorStates` is the sensor's THERMAL MASS — see evaluateVehicleSensors. It is per
+    // instance, not per prototype: two clones of one design are two physical objects, and a
+    // robot that parked itself in a furnace must not heat its twin across the world.
+    const inst = { id, protoId, owner, seed: { ...seed }, body: null, wireMap: this._wireMap(v), lastSamples: [], lastMotors: [], sensorStates: new Map() };
     const body = this._makeBody(v);
     if (!body) return null;
     M_BodySetPosition(this.M, body, { x: seed.x, y: seed.y });
@@ -171,6 +178,62 @@ export class HeadlessWorld {
     this.M.Body.setAngularVelocity(inst.body, 0);
     inst.seed = { x, y, rotation: inst.body.angle };
     return true;
+  }
+
+  /**
+   * Arrange EVERY bot in the world into a formation (co-op "Random / Line Up / Grid").
+   *
+   * Differs from the single-player button in scope, not in layout — the maths is the shared
+   * `formationPoses`, so both surfaces mean exactly the same thing by "Line Up".
+   *
+   * Three things happen per bot, and the third is the one that is easy to forget:
+   *   1. the body is teleported AND its momentum zeroed — a bot doing 8 px/step that is
+   *      teleported without that keeps flying, and the formation dissipates instantly;
+   *   2. `inst.seed` takes the new pose, so Reset returns the fleet to the formation rather
+   *      than undoing it (a layout the user just made should survive a Reset);
+   *   3. the documented `proto.instances[i]` entry is updated where it exists, so a saved
+   *      world exports what the screen shows. (Participant protos have no documented
+   *      instances on the server — their seeds live only on the running instance.)
+   *
+   * Bots are grouped by prototype, in first-appearance order, so each participant's fleet
+   * occupies one contiguous stretch of the line or grid instead of being scattered through it.
+   *
+   * @returns {number|null} how many bots were placed, or null if `mode` is not a formation
+   *   (the caller turns that into an error message rather than a silent no-op).
+   */
+  arrangeAll(mode, center, opts = {}) {
+    const live = this.instances.filter(i => i?.body);
+    const ordered = [];
+    for (const proto of this.prototypes()) {
+      for (const inst of live) if (inst.protoId === proto.id) ordered.push(inst);
+    }
+    // Instances whose proto is gone (shouldn't happen, but a bot must not be left out of a
+    // layout because of bookkeeping) still get placed, at the end.
+    for (const inst of live) if (!ordered.includes(inst)) ordered.push(inst);
+    const poses = formationPoses(ordered.length, mode, center ?? centroid(
+      ordered.map(i => ({ x: i.body.position.x, y: i.body.position.y })),
+    ), opts);
+    if (!poses) return null;
+    for (let i = 0; i < ordered.length; i++) {
+      const inst = ordered[i];
+      const p = poses[i];
+      M_BodySetPosition(this.M, inst.body, { x: p.x, y: p.y });
+      M_BodySetAngle(this.M, inst.body, p.rotation);
+      this.M.Body.setVelocity(inst.body, { x: 0, y: 0 });
+      this.M.Body.setAngularVelocity(inst.body, 0);
+      inst.seed = { x: p.x, y: p.y, rotation: p.rotation };
+    }
+    for (const proto of this.prototypes()) {
+      if (!Array.isArray(proto.instances)) continue;
+      const runs = this.instancesFor(proto.id);
+      for (let i = 0; i < runs.length && i < proto.instances.length; i++) {
+        const doc = proto.instances[i];
+        if (!doc) continue;
+        doc.position = { x: runs[i].seed.x, y: runs[i].seed.y };
+        doc.rotation = runs[i].seed.rotation;
+      }
+    }
+    return ordered.length;
   }
 
   /**
@@ -225,6 +288,11 @@ export class HeadlessWorld {
       inst.flashUntil = 0;
       inst.lastSamples = [];
       inst.lastMotors = [];
+      // Reset returns the ROBOT to its seed, so it must return the SENSORS to room
+      // temperature too — otherwise a vehicle resumes a Reset sitting at ambient but with a
+      // heat sensor still reading 80 °C from before the reset, and the lag makes that visible
+      // for most of a second.
+      inst.sensorStates?.clear();
       if (!inst.body) continue;
       M_BodySetPosition(this.M, inst.body, { x: inst.seed.x, y: inst.seed.y });
       M_BodySetAngle(this.M, inst.body, inst.seed.rotation ?? 0);
@@ -330,7 +398,10 @@ export class HeadlessWorld {
       const v = this.vehicleFor(inst);
       if (!v || !inst.body) continue;
       const pose = { x: inst.body.position.x, y: inst.body.position.y, angle: inst.body.angle };
-      const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.configs.sensors);
+      const samples = evaluateVehicleSensors({ ...v, pose, instanceId: inst.id }, snapshot, this.configs.sensors, {
+        sensorStates: inst.sensorStates,
+        dtMs: this.dtMs,
+      });
       inst.lastSamples = samples;
       allSamples.push(...samples.map(s => ({ ...s, instanceId: inst.id })));
       const sensorValue = id => samples.find(s => s.componentId === id)?.value ?? 0;

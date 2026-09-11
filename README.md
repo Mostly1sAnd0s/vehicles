@@ -60,8 +60,8 @@ not commit it, and a checkout needs `npm run build` before the page resolves
 ## Test (TDD)
 
 ```bash
-npm test                 # 338 unit tests (node --test, no framework)
-npm run smoke            # all nine headless-Chrome probes below, in sequence
+npm test                 # 422 unit tests (node --test, no framework)
+npm run smoke            # all eleven headless-Chrome probes below, in sequence
 npm run smoke:editor     # place + drag-snap + wire, gates + slots, body color via UI
 npm run smoke:world      # sim runs; sensor/motor polarity, detection, propagation
 npm run smoke:crud       # add/remove vehicle types, drag a running robot to reposition
@@ -69,6 +69,11 @@ npm run smoke:neurons    # Neuron response editor + "Add Output" multi-output ta
 npm run smoke:tabs       # Sandbox/Co-Op sidebar tabs, design row, Deploy gating
 npm run smoke:solid      # solid light: inspector toggle, ring===barrier, bump-and-stop,
                          #   eviction, and the soft-light control run
+npm run smoke:heat       # heat source + heat sensor: element, popup, solid furnace blocks a
+                         #   robot, thermal lag, Reset cools the probe, and light sensors are
+                         #   provably blind to the furnace
+npm run smoke:arrange    # co-op fleet organising (2 pages + gateway): host-only row, every
+                         #   bot of both participants laid out, seeds follow so Reset keeps it
 npm run smoke:coop       # co-op panel: host→code, deploy, fleet ±/✕, element sync, prune+GC
 npm run smoke:merged     # `npm run serve` itself: one port serves SPA + /info + WebSocket,
                          #   invite link built from /info, zero-click join, leave-means-leave
@@ -115,8 +120,17 @@ writing the solid-light work, and each produced a probe result that was flatly w
   `smoke:solid` frees its CDP port before launching and puts a unique `?nc=<runid>` on its
   URL, then refuses to proceed unless the page it attached to reports that same nonce.
 
-The rule when a probe disagrees with the source you can read: **distrust the probe**. Check
-`curl http://127.0.0.1:<cdp>/json` for the page URL, and who owns the web port.
+A third variant is **mixed caching**, and it looks exactly like a code regression: a probe
+edited `main.js` and `index.html` together, and the page came up with the NEW `main.js` and
+the CACHED `index.html` — so the app threw `CoopPanel: missing UI element "arrange"` for
+elements that were demonstrably in the file on disk (confirmed by `curl`). When HTML and JS
+must change together, a reused profile can serve them from two different runs.
+
+The rule when a probe disagrees with the source you can read: **distrust the probe**. First
+`curl` the file from the probe's own port (is the SERVER right?), then check
+`curl http://127.0.0.1:<cdp>/json` for the page URL, then who owns the web port — and only
+then touch the code. Killing leftover Chromes and `rm -rf`-ing the fixed profiles between
+runs is a 30-second habit that saves an hour of debugging a bug that does not exist.
 
 ## Layout
 
@@ -124,12 +138,16 @@ The rule when a probe disagrees with the source you can read: **distrust the pro
 config/                 JSON config (source of truth)
   app.json                fixed timestep, snap-point count, misc app defaults
   components.json         every placeable part + logic gates + Neuron + Propagator
-  sensors.json            light / distance / vehicle-detection sensor models
+  sensors.json            light / heat / distance / vehicle-detection sensor models
+                          (heat carries the thermal constants: ambientTemp, coupling,
+                          timeConstantMs = the probe's thermal inertia, attenuationLength for
+                          air absorption — OMIT it for transparent air; outputSpanC sets what
+                          counts as full-scale)
   actuators.json          powered-wheel model (power, friction, power curve)
-  world.json              world-element defaults — the solid-light radius, its
-                          min/max bounds and eviction clearance. OPTIONAL at runtime:
-                          every read falls back to a built-in, so an old
-                          public/config/ checkout still boots
+  world.json              world-element defaults per emitter type (light, heat): the solid
+                          radius, its min/max bounds, eviction clearance, and for heat the
+                          default temperature and its min/max. OPTIONAL at runtime: every read
+                          falls back to a built-in, so an old public/config/ checkout still boots
   ui.json                 keyboard shortcuts
 
 src/                    testable core (pure ESM, no DOM) — linked in as public/src
@@ -247,6 +265,38 @@ Done (single-player):
   the `min-width:0` + `flex:1 1 auto` pattern the Editor popup already used, so it holds for
   any future slider row and any label length, and it was verified by MEASURING the slider
   against the popup box in the browser (it was 89px wide and overflowing by 14px before).
+- **Heat source + Heat sensor** — real thermal physics, not the light sensor re-skinned. A
+  heat source radiates and a heat sensor reports the temperature of its own probe, so four
+  things are true here that are not true of light: there is an **ambient** temperature (a
+  world with no sources reads room temperature, and a source *at* ambient is undetectable);
+  emission is **Stefan–Boltzmann** `T⁴` computed in **kelvin**, so a 300 °C furnace is far more
+  than 5× a 60 °C one; propagation is inverse-square but the air **absorbs infrared**
+  (`e^(−r/L)`, off by default); and the probe has **thermal mass**, a lumped-capacitance body
+  exchanging radiation with what it sees, integrated exactly — so the reading **lags** when a
+  vehicle moves, **rings down** when it leaves, **accumulates** over repeated passes, and two
+  fires settle at **one equilibrium** between them. That equilibrium is a conductance-weighted
+  **mean** of the source and ambient temperatures, never `ambient + gain·flux`: flux diverges
+  as a probe closes on a source, and a passive sensor **cannot** read hotter than the hottest
+  thing it sees (parked on a 220 °C furnace it settles at 218 °C, not 4800). `τ` (the
+  `Response` field) means what a datasheet says: one τ covers 63.2 % of the gap; `0` gives an
+  instantaneous probe. Note a *cooling* probe legitimately reads above its cooler surroundings
+  for a while — that is the thermal mass, and it is asserted as deliberately as the bound. Being a circle, it
+  gets the same popup rules as a lamp — Temperature (config-bounded, and a value **below**
+  ambient makes a genuine cold sink), no Rotation, and an optional **Solid body** sharing the
+  ring-equals-barrier rule. The two fields are separate arrays in the world snapshot, so **a
+  light sensor cannot see heat and a heat sensor cannot see light** by construction, not by
+  tuning (probed in the browser: light readings bit-identical while a furnace goes 60→2000 °C).
+  Model, calibration and limits: `docs/heat-plan.md`, `src/sensors/heat.js`, `tests/heat.test.js`
+- **Fleet organising in a hosted co-op world**: the host gets **Random / Line Up / Grid** in
+  the Co-Op pane, and unlike the Sandbox buttons (which lay out one prototype) these arrange
+  **every bot in the world**, from every participant, grouped so each person's fleet holds one
+  contiguous stretch. Layout centres on the host's camera, so bots gather where they are
+  looking. Host-only on the server, because it moves other people's bots — hidden for
+  participants, refused if they call it anyway, with nothing moved. The poses are written to
+  each bot's **seed** as well as its body (with momentum zeroed, so a fast bot cannot fly back
+  out of the line), which means **Reset keeps the formation**: the layout becomes a property of
+  the world rather than a momentary glimpse. Both surfaces share one layout module
+  (`src/models/formation.js`), so "Line Up" cannot come to mean 130px here and 90px there
 - **Solid light sources**: any light can be made a real object a vehicle bumps into —
   an inspector **Solid** toggle plus a radius slider (config-bounded, default 24, and
   contained inside the popup rather than overflowing it). A light no longer offers a

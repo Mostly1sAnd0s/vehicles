@@ -556,9 +556,9 @@ export class VehicleEditor {
     if (typeof c.props?.range === 'number') {
       html += `<label>Range <input type="number" id="ins-range" min="1" value="${c.props.range}"></label>`;
     }
-    const fovSensor = c.type === 'light_sensor' || c.type === 'vehicle_detection_sensor';
+    const fovSensor = c.type === 'light_sensor' || c.type === 'vehicle_detection_sensor' || c.type === 'heat_sensor';
     if (fovSensor) {
-      const modelKey = c.type === 'light_sensor' ? 'light' : 'vehicle_detection';
+      const modelKey = c.type === 'light_sensor' ? 'light' : c.type === 'heat_sensor' ? 'heat' : 'vehicle_detection';
       const cfgFov = this.state.configs?.sensors?.[modelKey]?.fov ?? 2 * Math.PI;
       const fovRad = c.props?.fov ?? cfgFov;
       html += `<label>FOV (&deg;) <input type="number" id="ins-fov" min="0" max="360" step="5" value="${Math.round(fovRad * 180 / Math.PI)}"></label>`;
@@ -568,6 +568,16 @@ export class VehicleEditor {
       const thresh = c.props?.threshold ?? lightCfg.detectionThreshold ?? 0.02;
       html += `<label>Threshold <input type="number" id="ins-thresh" min="0.001" step="0.005" value="${thresh}"></label>`;
       html += `<div class="tip-box">reach &asymp; &radic;(intensity / threshold) &mdash; lower to sense from farther</div>`;
+    }
+    if (c.type === 'heat_sensor') {
+      const heatCfg = this.state.configs?.sensors?.heat ?? {};
+      const sens = c.props?.sensitivity ?? 1;
+      const lag = c.props?.lagMs ?? heatCfg.timeConstantMs ?? 400;
+      html += `<label>Sensitivity <input type="number" id="ins-hsens" min="0.05" step="0.05" value="${sens}"></label>`;
+      html += `<label>Response (ms) <input type="number" id="ins-hlag" min="0" step="50" value="${lag}"></label>`;
+      const ambient = heatCfg.ambientTemp ?? 20;
+      const span = heatCfg.outputSpanC ?? 40;
+      html += `<div class="tip-box">reads the temperature of its own probe: radiated heat &prop; T⁴ and 1/r&sup2;, so distance and temperature both bite hard. Response is the thermal-mass lag &mdash; 0 is an instant probe, bigger cools slower. Full output at ~${ambient + span}&deg;C; at rest it reads room temperature (${ambient}&deg;C), and it cannot see light sources.</div>`;
     }
     if (c.type === 'powered_wheel') {
       const aCfg = this.state.configs.actuators?.powered_wheel ?? {};
@@ -650,6 +660,18 @@ export class VehicleEditor {
     box.querySelector('#ins-dthresh')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.threshold = Math.max(0, Number(e.target.value) || 0); this.refresh(); });
     box.querySelector('#ins-fov')?.addEventListener('change', e => { c.props.fov = (Math.min(360, Math.max(0, Number(e.target.value) || 0))) * Math.PI / 180; this.refresh(); });
     box.querySelector('#ins-thresh')?.addEventListener('change', e => { c.props.threshold = Math.max(0.001, Number(e.target.value) || 0.001); this.refresh(); });
+    // Heat: scale the model, never replace it. `sensitivity` multiplies the coupling (degrees
+    // per unit of irradiance); `lagMs` replaces τ. Both are clamped away from 0-or-NaN, because
+    // a negative sensitivity would make a furnace read as cold and a NaN τ poisons the
+    // exponential response, which then silently freezes whatever it drives.
+    box.querySelector('#ins-hsens')?.addEventListener('change', e => {
+      const v = Number(e.target.value);
+      c.props.sensitivity = Number.isFinite(v) ? Math.min(100, Math.max(0.05, v)) : 1; this.refresh();
+    });
+    box.querySelector('#ins-hlag')?.addEventListener('change', e => {
+      const v = Number(e.target.value);
+      c.props.lagMs = Number.isFinite(v) ? Math.min(60000, Math.max(0, v)) : 0; this.refresh();
+    });
     box.querySelector('#ins-pol')?.addEventListener('change', e => { c.polarity = e.target.value; this.refresh(); });
     box.querySelector('#ins-rot')?.addEventListener('change', e => { c.rot = Number(e.target.value); this.refresh(); });
     box.querySelector('#ins-prop-th')?.addEventListener('change', e => { c.props = c.props ?? {}; c.props.threshold = Math.max(1, Number(e.target.value) || 260); this.refresh(); });
@@ -966,7 +988,11 @@ export class VehicleEditor {
         ctx.lineWidth = 2;
         ctx.stroke();
       } else {
+        // A heat sensor is warm-coloured so it does not read as a light sensor at a glance —
+        // they are the same shape and category, and confusing them is the one mix-up this
+        // feature could cause. Everything else still colours by category.
         ctx.fillStyle = inverted ? '#6e2b3a'
+          : c.type === 'heat_sensor' ? '#7a3626'
           : def?.category === 'actuator' ? '#35547a'
           : def?.category === 'sensor' ? '#2f6b46' : 'rgba(138,151,168,.6)';
         if (c.id === this.selectedComp) ctx.strokeStyle = '#ffffff'; else ctx.strokeStyle = inverted ? '#ff5d5d' : '#10141a';

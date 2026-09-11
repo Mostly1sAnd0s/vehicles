@@ -69,6 +69,7 @@
       <div class="side-pane active" id="side-pane-sandbox">
         <h3>Elements</h3>
         <button id="add-light">+ Light source</button>
+        <button id="add-heat" title="A hot (or cold) body. Radiates heat — heat sensors see it, light sensors do not">+ Heat source</button>
         <button id="add-rock">+ Rock (circle)</button>
         <button id="add-wall">+ Wall (rect)</button>
         <h3>Vehicles</h3>
@@ -87,6 +88,14 @@
         </div>
         <!-- Shared fleet (M5 p3–4): other participants' deployed vehicles, add/remove for the host -->
         <div id="remote-fleet" hidden></div>
+        <!-- Fleet organising (host-only): lays out EVERY bot in the shared world, not just your
+             own design the way the Sandbox buttons do. Same three layouts as single-player — the
+             maths is shared in models/formation.js — and they centre on where the host is looking. -->
+        <div class="coop-arrange" id="coop-arrange" hidden>
+          <button id="coop-arrange-random" title="Scatter every bot in the world around your view">Random</button>
+          <button id="coop-arrange-line" title="Line every bot in the world up">Line Up</button>
+          <button id="coop-arrange-grid" title="Put every bot in the world in a grid">Grid</button>
+        </div>
         <h3>Co-op</h3>
         <!-- No gateway address to type: the gateway shares this server's port, so a joiner is
              already pointed at the right place whenever the page came from the host. The address
