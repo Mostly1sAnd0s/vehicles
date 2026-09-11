@@ -33,6 +33,7 @@
     "model": "presence",
     "defaultRange": 300,
     "fov": 3.141592653589793,
-    "showCone": true
+    "showCone": true,
+    "gridCellSize": 256
   }
 }

@@ -10,6 +10,7 @@
  * works in Node (`import('matter-js')`) and, if ever needed, in the browser (`window.Matter`).
  */
 import { evaluateVehicleSensors } from './sampleSensors.js';
+import { buildVehicleGrid } from '../sensors/vehicleDetection.js';
 import { worldElementsToSnapshot } from './worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../actuators.js';
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from './logic.js';
@@ -390,6 +391,9 @@ export class HeadlessWorld {
 
     const snapshot = worldElementsToSnapshot(this.worldDoc.elements ?? {}, this.configs);
     snapshot.vehicles = this.instances.filter(i => i.body).map(i => ({ id: i.id, x: i.body.position.x, y: i.body.position.y, angle: i.body.angle }));
+    // One spatial-hash index per step, shared by every vehicle-detection sensor: the array
+    // scan is O(fleet) per sensor (O(N²) per step at 1000 robots); the grid is O(near).
+    snapshot.vehicleGrid = buildVehicleGrid(snapshot.vehicles, this.configs.sensors);
     const thrustScale = this.configs.app.defaults.thrustScale ?? 0.25;
     const actCfg = this.configs.actuators.powered_wheel;
     const allSamples = [];

@@ -1276,3 +1276,93 @@ Design, model choice and limits are written up in `docs/heat-plan.md`. As built:
 * The suite's cache hazard bit again during this work (new JS + cached HTML, README
   "Testing"), producing a confident false failure; recorded there so the next reader spends
   thirty seconds on it instead of an hour.
+
+## M10 — Performance: spatial-hash vehicle detection + worker-stepped simulation
+
+### Why (the actual problem)
+
+Target scale is ~1000 vehicles. Two CPU costs dominate a step (measured by reading the loop,
+confirmed by user htop traces: the GPU sits idle while one browser thread pins):
+
+1. **Vehicle-detection is O(N²).** `detectVehicle` scans every other vehicle per sensor per
+   step: 1000 vehicles × 1 sensor each ≈ 1M hypot/atan2 checks per step, 60M/s. This is the
+   reason lag ramps superlinearly with fleet size.
+2. **Everything runs on the main thread.** In single-player the Matter engine, sensor math,
+   propagation AND Canvas 2D drawing share the page's only JS thread; physics overrun the
+   16.6 ms budget and the UI (pan, drag, inspector) stutters with it.
+
+Rendering (Canvas 2D → WebGL) was considered and deliberately **not** part of M10: it only
+moves the drawing slice, while the lag is physics+sensors. Parked for a later program.
+
+### M10.1 — Spatial hash grid for vehicle detection
+
+* **`src/simulation/spatialGrid.js`** — a pure, dependency-free grid: `buildGrid(items,
+  {cellSize})` + `queryCircle(grid, x, y, r)` returning a candidate SUPERSET (cells whose bbox
+  overlaps the query circle); the caller does the exact predicate. Correct for any range,
+  negative coords, dense piles; a huge range degrades to brute force but stays correct.
+* **`src/sensors/vehicleDetection.js`** gains `buildVehicleGrid(vehicles, sensorsConfig)` and
+  `detectVehicleGrid(point, dir, range, fov, grid, selfId)`. Semantics are the array model's
+  exactly: hard range cap inclusive, FOV gate shared via `inFov`, self excluded by instance id,
+  nearest wins. One documented divergence: among EXACTLY-equal-distance ties the reported
+  target id may differ (cell order vs array order); distance and detected are identical.
+* **Seam**: `sampleSensors` uses `world.vehicleGrid` when the engine provides one and falls
+  back to `world.vehicles` otherwise — pure function unchanged in spirit, every existing test
+  keeps passing, and co-op/`HeadlessWorld` and the browser engine opt in by building the grid.
+* **Config**: `sensors.json → vehicle_detection.gridCellSize` (OPTIONAL read with built-in
+  fallback, the M8 `world.json` idiom — an old checkout still boots).
+* Obstacle raycasts and heat occlusion stay array-scanned: obstacles are few, this is the
+  wrong fight. Parked.
+
+### M10.2 — Worker-stepped single-player simulation
+
+The codebase already HAS a headless, injectable, server-authoritative engine
+(`HeadlessWorld`) that is behaviour-parity by construction. Single-player converges onto it
+instead of maintaining a third engine: **the page steps a `HeadlessWorld` through a message
+protocol, and that protocol is executed either on the main thread or inside a Web Worker —
+one protocol, two transports.**
+
+* **`src/simulation/simProtocol.js`** — `applyCommand(world, pstate, msg)` (pure given the
+  world + protocol state): ops `init | sync | move | reset | step | snapshot`. Protocol state
+  owns the extras single-player needs that co-op does: conversion EVENT log (so the page can
+  mirror `vehicleOverride` for drawing/inspector), per-step PATH recording (capped, delivered
+  incrementally only while `trackPaths` is on), and `detail` gating (samples/motors omitted
+  from replies when Beams+Values are off — the payload is the cost at 1000 bots).
+* **`public/app/simMirror.js`** — `applyReply(instances, reply, opts)`: writes poses onto
+  plain mirror bodies `{position, angle, velocity, angularVelocity}` (everything the draw +
+  hit-test code already reads), appends path points, applies flash, swaps converted docs.
+  With `opts.realBodies` (LocalBridge only — same heap) the mirror IS the Matter body: zero
+  copies, direct-write compatibility.
+* **`public/app/simBridge.js`** — `LocalSimBridge` runs the protocol synchronously on the
+  main thread; `WorkerSimBridge` posts the same messages to a Worker and delivers replies
+  async. `WorldSim` is written ONLY against the async bridge shape — LocalBridge's replies
+  are synchronous, so the classic sync semantics (tests, `btnStep`, probes that write
+  `inst.body.position` directly) survive unchanged when the Local transport is selected.
+* **`public/app/sim.worker.js`** — classic Worker: `importScripts('../vendor/matter.min.js')`
+  (the UMD build keys off `this`, so it cannot be imported as ESM) then a dynamic `import()`
+  of the ESM sim modules. Same protocol entry point as local.
+* **Mode selection**: Worker by default (that is the point); `?worker=0` forces the local
+  transport; a Worker boot failure falls back to local with a loud console warning rather
+  than a dead canvas. Existing smoke probes run `?worker=0` (they poke bodies directly and
+  assume sync steps — same engine, same protocol, so coverage is honest); a new
+  `smoke:worker` probe exercises the default async path: boot, Play→motion, async step
+  settling, drag→seed adoption, Reset.
+* **Main thread keeps**: world/prototype docs, seeds, `ensureCount`, element editing, hit
+  tests (mirror poses), drawing, propagation status pill, inspector. Eviction stays the
+  existing main-side sweep (shared `pushOutOfCircle`) but applies THROUGH the bridge so the
+  engine's seeds follow the evicted pose.
+* **Cadence/backpressure**: the rAF loop still accumulates fixed-dt; it sends ONE `step n`
+  per frame and skips sending while a step is in flight — at overload the sim loses time
+  (like today's dropped frames) instead of queueing unbounded work or freezing the UI.
+* Heat `sensorStates` live on the engine's instances (they already do in `HeadlessWorld`);
+  the page's copies become unused in bridged mode. Reset clears both sides.
+
+### Verification plan (TDD order)
+
+1. `tests/spatialGrid.test.js` + `tests/vehicleDetectionGrid.test.js` first (semantics
+   equivalence against the brute-force model incl. randomised corpora; boundary-inclusive
+   range; self-exclusion; a loose perf assertion grid ≪ brute force at 2000 targets).
+2. `tests/simProtocol.test.js` — protocol commands against a real `HeadlessWorld` with
+   node matter-js: init/sync/move/reset/step semantics, conversion events, path recording +
+   cap + incremental delivery, detail gating. `tests/simMirror.test.js` — reply application.
+3. world.js rewire guarded by the full unit suite + smoke probes; `world.sim`, `proto.crud`,
+   `world.solidlight`, `world.heatsource` on `?worker=0`; new `smoke:worker` for the Worker.

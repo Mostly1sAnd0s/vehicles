@@ -4,6 +4,7 @@
  */
 
 import { evaluateVehicleSensors } from '../src/simulation/sampleSensors.js';
+import { buildVehicleGrid } from '../src/sensors/vehicleDetection.js';
 import { worldElementsToSnapshot } from '../src/simulation/worldSnapshot.js';
 import { computeActuation, actuatorPolaritySign, applyMotorPower, wheelFrictionAir } from '../src/actuators.js';
 import { evaluateLogicGates, vehicleSignature, selectPropagationTargets, cloneVehicleForConversion } from '../src/simulation/logic.js';
@@ -319,6 +320,9 @@ export class WorldSim {
     snapshot.vehicles = this.instances
       .filter(i => i.body)
       .map(i => ({ id: i.id, x: i.body.position.x, y: i.body.position.y, angle: i.body.angle }));
+    // Spatial-hash index of this step's fleet poses, shared by every vehicle-detection
+    // sensor (O(near) per query instead of O(fleet) — see src/simulation/spatialGrid.js).
+    snapshot.vehicleGrid = buildVehicleGrid(snapshot.vehicles, this.state.configs.sensors);
     const thrustScale = this.state.configs.app.defaults.thrustScale ?? 0.25;
     const actCfg = this.state.configs.actuators.powered_wheel;
     const allSamples = [];

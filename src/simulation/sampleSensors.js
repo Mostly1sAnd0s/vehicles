@@ -9,7 +9,7 @@
 import { vehicleToWorld } from '../models/vehicle.js';
 import { lightLevelNormalized, lightEffectiveRange } from '../sensors/light.js';
 import { castRay } from '../sensors/raycast.js';
-import { detectVehicle } from '../sensors/vehicleDetection.js';
+import { detectVehicle, detectVehicleGrid } from '../sensors/vehicleDetection.js';
 import { applySensorPolarity } from '../sensors/polarity.js';
 import { heatConfig, heatField, stepSensorTemperature, heatOutput, heatEffectiveRange } from '../sensors/heat.js';
 
@@ -128,7 +128,13 @@ export function evaluateVehicleSensors(vehicle, world, sensorConfig, opts = {}) 
       const vcfg = sensorConfig.vehicle_detection ?? {};
       const vrange = c.props?.range ?? vcfg.defaultRange ?? 300;
       const vfov = c.props?.fov ?? vcfg.fov; // undefined -> omnidirectional
-      const { detected, distance, target } = detectVehicle(point, direction, vrange, vfov, world.vehicles ?? [], vehicle.instanceId);
+      // Grid-backed when the engine indexed this step's fleet poses (`world.vehicleGrid`,
+      // built once per step by both engines); the array scan is the identical predicate
+      // over every target and stays the fallback for any caller without a grid. Same
+      // result, O(near) instead of O(fleet).
+      const { detected, distance, target } = world.vehicleGrid
+        ? detectVehicleGrid(point, direction, vrange, vfov, world.vehicleGrid, vehicle.instanceId)
+        : detectVehicle(point, direction, vrange, vfov, world.vehicles ?? [], vehicle.instanceId);
       value = applySensorPolarity(detected ? 1 : 0, c.polarity, 1);
       samples.push({
         componentId: c.id,
