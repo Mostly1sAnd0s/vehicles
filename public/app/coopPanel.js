@@ -18,7 +18,10 @@
  *   - **▶/⏸/↺** session controls (host-only; admin on the server).
  *   - **Shared fleet list** → every participant's prototype with its live bot count (from
  *     snapshots); the host can add/remove (not edit) other participants' vehicles with −/+/✕,
- *     which map to `setCount` (server enforces admin-only).
+ *     which map to `setCount` (server enforces admin-only). The count follows the PROPAGATION
+ *     LINEAGE (models/lineage.js): a bot a Propagator converted counts for the converter's
+ *     proto, so a "survival of the fittest" run shows the live scoreboard — the row's −/+/✕
+ *     still act on the participant's real fleet, because only the count moves, never ownership.
  *   - **Disconnect** → closes the socket; the server prunes this client's bots from the world.
  *
  * All rules live server-side (Session/gateway); this file only flips DOM state to match.
@@ -27,6 +30,7 @@
  */
 import CoopClient from '../src/net/client.js';
 import { parseHostInput, buildWsUrl, buildInvite, joinCodeFromHash, formatHostPort } from '../src/net/invite.js';
+import { lineageOf } from '../src/models/lineage.js';
 
 const HOST_KEY = 'bv.coop.hostAddr';   // only ever an OVERRIDE; empty means "this server"
 const NAME_KEY = 'bv.coop.name';
@@ -488,13 +492,17 @@ export class CoopPanel {
   /**
    * Shared fleet list (phase 3–4): every participant's prototype with its live bot count. The host
    * gets −/+/✕ (add/remove, never edit); others see a read-only roster of who is driving what.
+   * The count is LINEAGE-aware (models/lineage.js): a bot converted by a Propagator counts under
+   * the converter's proto, so the list doubles as the "survival of the fittest" scoreboard.
+   * (The −/+/✕ handlers below still size fleets by real protoId — setCount acts on the deployer's
+   * instances, and lineage never moves ownership.)
    */
   renderFleet() {
     const c = this.client;
     const el = this.ui.remoteFleet;
     if (!el || c.status !== 'connected') return;
     const isAdmin = c.you?.role === 'admin';
-    const rows = c.clients.map((p) => ({ ...p, count: c.bots.filter((b) => b.protoId === p.protoId).length }));
+    const rows = c.clients.map((p) => ({ ...p, count: c.bots.filter((b) => lineageOf(b) === p.protoId).length }));
     el.hidden = rows.length === 0;
     // Rebuild the rows only when membership or role changes; otherwise patch counts/disabled state
     // IN PLACE. A full innerHTML wipe ran at snapshot rate (15 Hz) and destroyed the −/+/✕ buttons

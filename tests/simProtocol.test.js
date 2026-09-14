@@ -337,3 +337,30 @@ test('sync with a prop-driven geometry change (collisionRadius via props) rebuil
   applyCommand(world, pstate, { op: 'sync', vehicles: [{ id: 'p1', vehicle: withProps }] });
   assert.ok(world.instances.find(i => i.id === 'i1').geoSig.includes('5'));
 });
+
+test('reply bots carry their lineage, and a conversion re-attributes it (single-player scoreboard parity)', () => {
+  const { world, pstate } = newWorld();
+  const ri = applyCommand(world, pstate, {
+    op: 'init', seq: 1, dtMs: 16.6, elements: [],
+    vehicles: [
+      { id: 'p1', name: 'A', vehicle: wheelVehicle({ propagate: true }) },
+      { id: 'p2', name: 'B', vehicle: wheelVehicle() },
+    ],
+    instances: [
+      { id: 'i1', protoId: 'p1', seed: { x: 0, y: 0, rotation: 0 } },
+      { id: 'i2', protoId: 'p2', seed: { x: 80, y: 0, rotation: 0 } }, // inside the 260 threshold
+    ],
+  });
+  // Origin: the init reply (before any step) reports each bot under its own proto.
+  assert.equal(ri.bots.find(b => b.id === 'i1').lineage, 'p1', 'unconverted bot reports its own proto');
+  assert.equal(ri.bots.find(b => b.id === 'i2').lineage, 'p2');
+  let r = applyCommand(world, pstate, { op: 'step', n: 1, detail: false });
+  for (let k = 0; k < 5 && r.bots.find(b => b.id === 'i2')?.lineage !== 'p1'; k++) {
+    r = applyCommand(world, pstate, { op: 'step', n: 1, detail: false });
+  }
+  assert.equal(r.bots.find(b => b.id === 'i2').lineage, 'p1', 'the converted bot\u2019s reply lineage follows the converter');
+  assert.equal(r.bots.find(b => b.id === 'i2').protoId, 'p2', 'protoId is the protocol\u2019s identity field: it never moves');
+  // a reset reply restores the origin lineage, like the engine does.
+  const rr = applyCommand(world, pstate, { op: 'reset', detail: false });
+  assert.equal(rr.bots.find(b => b.id === 'i2').lineage, 'p2');
+});

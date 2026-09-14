@@ -60,8 +60,8 @@ not commit it, and a checkout needs `npm run build` before the page resolves
 ## Test (TDD)
 
 ```bash
-npm test                 # 422 unit tests (node --test, no framework)
-npm run smoke            # all eleven headless-Chrome probes below, in sequence
+npm test                 # 495 unit tests (node --test, no framework)
+npm run smoke            # all twelve headless-Chrome probes below, in sequence
 npm run smoke:editor     # place + drag-snap + wire, gates + slots, body color via UI
 npm run smoke:world      # sim runs; sensor/motor polarity, detection, propagation
 npm run smoke:crud       # add/remove vehicle types, drag a running robot to reposition
@@ -75,6 +75,9 @@ npm run smoke:heat       # heat source + heat sensor: element, popup, solid furn
 npm run smoke:arrange    # co-op fleet organising (2 pages + gateway): host-only row, every
                          #   bot of both participants laid out, seeds follow so Reset keeps it
 npm run smoke:coop       # co-op panel: host→code, deploy, fleet ±/✕, element sync, prune+GC
+npm run smoke:lineage    # propagation lineage: host deploys a Propagator design, joiner a plain
+                         #   one; conversion moves the COUNT to the converter's row on both
+                         #   screens (2/2 → 4/0), ownership never moves, Reset restores 2/2
 npm run smoke:merged     # `npm run serve` itself: one port serves SPA + /info + WebSocket,
                          #   invite link built from /info, zero-click join, leave-means-leave
 ```
@@ -164,6 +167,10 @@ src/                    testable core (pure ESM, no DOM) — linked in as public
                           slider binds to), solidLightCircles, pushOutOfCircle — pure,
                           so the drawn ring, the readout and the Matter body cannot
                           disagree
+  models/lineage.js       the converted-bot tally: lineageOf / lineageCounts. A bot a
+                          Propagator converted COUNTS for the converter's proto
+                          (transitively along the conversion chain) — the "survival of
+                          the fittest" scoreboard; ownership (protoId/owner) never moves
   sensors/light.js        distance-normalized level, effective range (drives beam
                           length), cone helper (inFov)
   sensors/raycast.js      ray vs circle / rotated rect (pure geometry)
@@ -352,7 +359,13 @@ Done (co-op, milestone **M5**):
   ON-transition only, never on the drag stream (that would pin them in place at 30 Hz).
 - **Host fleet management**: `#remote-fleet` lists every participant's prototype
   with a live bot count; the host gets −/+/✕ plus a typeable exact-count input
-  per row (`setCount`, clamped 0–50), never edit.
+  per row (`setCount`, clamped 0–50), never edit. The count follows the
+  **propagation lineage** (M11): a bot a Propagator converted counts for the
+  converter's proto — transitively, so a "survival of the fittest" run shows the
+  live scoreboard (A converts one of B's bots ⇒ A's row 11, B's 9). Only the count
+  moves: `protoId`/`owner` never do, so deploy, ±/✕ and prune-on-leave keep
+  targeting the deployer, and −/+/✕ still size the *real* fleet. `reset()` restores
+  every lineage to its origin, exactly as it restores the designs.
 - **Host leaves → everyone goes home**: `worldClosed` broadcast, sockets
   terminated, world reclaimed, joiners get their pre-join "home" world restored.
 - Shared-bot rendering with each participant's hue, per-bot beams/values,

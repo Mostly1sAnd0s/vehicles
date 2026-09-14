@@ -20,6 +20,9 @@ const optNum = (v) => (v == null || !Number.isFinite(v) ? null : v); // keep "ab
 function normalizeBot(b) {
   return {
     id: b?.id, protoId: b?.protoId, owner: b?.owner ?? null, ownerToken: b?.ownerToken ?? null,
+    // The converted-bot tally (models/lineage.js): the proto this bot COUNTS under. Falls back
+    // to the bot's own protoId so a pre-lineage sender still counts its bots correctly.
+    lineage: b?.lineage ?? b?.protoId ?? null,
     x: num(b?.x), y: num(b?.y), angle: num(b?.angle), vx: num(b?.vx), vy: num(b?.vy),
     // The fallback must match DEFAULT_BODY_COLOR (public/app/color.js) and worldSim.snapshot()'s
     // fallback — it used to be #cc3333 red here, which re-introduced the red-bot bug for any

@@ -1411,3 +1411,103 @@ about; write it on a machine that can run it.
 Worker transport, all twelve existing probes. The Node-side worker-transport test covers the
 worker script's boot order, message loop and structured-clone replies; the protocol tests
 cover engine semantics; but treat the in-browser pass as REQUIRED before shipping M10.
+
+## M11 — Propagation lineage: the "survival of the fittest" scoreboard
+
+### Why
+
+A Propagator conversion has always swapped the converted bot's *design*, but the bot was
+still *counted* under its own proto: the co-op fleet list (`#remote-fleet`) tallied each
+participant's row from the clones they deployed, so a fittest-survival run (A's design
+spreads through B's population) could never be read off the UI — B's row stayed at 10 even
+as A's design rode on every one of B's bots. The requirement: when A's bot converts one of
+B's bots, A's row reads 11 and B's reads 9 — live, on every participant's screen.
+
+### Confirmed decisions (as built)
+
+* **Lineage is a COUNT, not ownership.** Each instance carries `lineage` — the proto it
+  *counts under*. It starts as the bot's own proto (its origin) and, on conversion, adopts
+  the **converter's** lineage — not merely the converter's proto — so attribution follows
+  the configuration chain: A converts B, and B's clone converts C ⇒ C counts for A. The
+  converter's lineage is already the head of the chain, so a single assignment IS the
+  recursion. `protoId` / `owner` / `ownerToken` never move: deploy rebuilds, fleet −/+/✕
+  (`setCount`) and prune-on-leave all keep targeting the deployer. A converted bot is still
+  the joiner's bot — it just no longer counts for the joiner.
+* **One pure seam.** `src/models/lineage.js` (`lineageOf`, `lineageCounts`) is the only
+  place the rule lives, per the codebase's pure-core convention. The engine
+  (`worldSim`: origin at `addInstance`, adoption in `_stepPropagation`, restore in
+  `reset()`, emission in `snapshot()`), the single-player protocol reply (`simProtocol`
+  `botsOf`), the co-op wire client (`net/client` `normalizeBot`, with a protoId fallback so
+  a pre-lineage sender still counts correctly) and the fleet UI
+  (`coopPanel.renderFleet` counts by `lineageOf`) all read through it — the scoreboard
+  cannot drift from the simulation.
+* **No protocol change, no `Session`/gateway edit.** The wire bot gains one string field
+  (`lineage`); `roundBot` spreads it untouched, and the gateway's *unconditional* 15 Hz
+  snapshot broadcast (`bcastTimer`) delivers it even for a PAUSED world (the 60 Hz
+  `stepOnce` timer is the only one that idles when paused). That is what makes Pause +
+  Reset update every screen's rows with zero server-side changes.
+* **−/+/✕ still size the REAL fleet.** `setCount` acts on the deployer's instances; the
+  displayed number is the lineage tally. A row showing 11 (10 own + 1 converted) that the
+  host sets to 11 becomes 11 real + 1 converted = 12 shown. Deliberate: the server
+  semantics are the real ones, the display is the scoreboard.
+* **Reset restores the initial mix** exactly as it restores the designs: `reset()` puts
+  every `lineage` back to its origin proto alongside the `vehicleOverride` sweep (the M7
+  reset-propagation fix, extended one field).
+
+### Deviations and bugs found on the way (each pinned by a test or probe)
+
+* **Two of my own first test assertions were wrong, not the code** (the M9 recurrence):
+  (a) I asserted an "out-of-range" prey at x=3100 was untouched — but the SECOND propagator
+  sat at x=3000, 100 px away, and converted it exactly as designed. Moved the bot to 7000.
+  (b) I asserted the first-step reply still showed the prey unconverted — at 80 px inside
+  a 260-radius Propagator the conversion fires on step one, so the origin-lineage assertion
+  belongs on the INIT reply. Both read like sim bugs; neither was one.
+* **The in-page polling loop starves under a live shared sim (probe bug).** The new probe's
+  first version polled the fleet rows with an in-page `await sleep(100)` IIFE while the sim
+  ran: with two pages chewing 15 Hz snapshots + rAF drawing, the eval never settled (timed
+  out at 25 s) even though the rows it wanted were already rendered — the live-state
+  diagnostic proved the UI right and the poll blind. The row waits are now Node-side loops
+  of SIMPLE sync evals (`renderFleet` re-renders on every snapshot message, so a one-shot
+  read has no stale-frame window to poll through). Rule for future probes: while a world is
+  running, never wait on in-page timers; read state one-shot from Node.
+* **Headless boot-stall flake resurfaced in two M8/M9 probes.** `world.heatsource` and
+  `world.solidlight` still carried the original 12-second boot loop with no re-navigation
+  (predating the M6/M10 stall-absorption treatment), and this machine's renderer intermittently
+  stalls module loading for tens of seconds (PLAN item-2 NOTE). Both now use the documented
+  pattern: 45×500ms per attempt + `Page.navigate` retry up to 2× (RENAV logged), with the
+  probes' existing freshness nonces still proving the attached page is the run's own.
+  (Also found during triage: every probe run leaves orphaned `python3 -m http.server`
+  processes behind — the documented `sh -c` spawn hazard — which the probes' own port
+  pre-cleans absorb; they are harmless but worth a sweep after a red run.)
+* **`coopPanel.js` is the one file over 500 lines touched** (554 before this feature, 562
+  after — +8, mostly comments). It was already over the limit; the change is the minimal
+  import + one-line count expression, and a refactor to extract the invite-link section
+  (~100 lines) is the right fix, parked as a follow-up because three smoke probes pin its
+  DOM behavior. Everything new or re-sized this feature is under 500 (`worldSim.js`
+  487→492).
+
+### Verified
+
+* Unit **495/495** = the previous 478 + 17: `lineage` 10 (pure core: origin/fallback,
+  explicit-null fallback, transitive tally, legacy + uncountable edges), `coop.lineage` 5
+  (engine: adoption moves only the count — protoId/owner provably stay; out-of-range prey
+  untouched; chain A→B→C counts for A; reset restores; and the Session wire over the full
+  protocol, incl. the 2/2→3/1 tally and `ownerToken` not moving), `simProtocol` 1 (reply
+  bots carry lineage; conversion re-attributes; reset restores), `multiplayer.client` 1
+  (e2e over a real gateway: both clients see the re-attribution).
+* New probe **`tests/smoke/coop.lineage.mjs`** (`npm run smoke:lineage`, added to `npm run
+  smoke`; web 8938 / CDP 9252 / gateway 8967, unique profile + freshness nonce): two real
+  browser pages + an in-process gateway. Host deploys the default sun-car **plus a
+  Propagator** (450 radius), the joiner deploys it unchanged; both rows read 2/2 on both
+  screens before the run; after Line Up + Play the Propagator converts BOTH of the joiner's
+  bots and the rows read 4/0 on both screens; the server world, the wire snapshot and both
+  clients' `client.bots` agree on every bot's `lineage` (converted bots keep the joiner's
+  `ownerToken`); Pause + Reset restores 2/2 on both screens *while paused*. Two consecutive
+  green runs after the fix above (the first run exposed the in-page polling starvation).
+* No regressions: `smoke:coop` (fleet ±/✕), `smoke:arrange` (two-page organising),
+  `smoke:merged` (one-port hosting), `smoke:heat` (incl. its hardened boot),
+  `smoke:solid`, `smoke:editor`, `smoke:neurons`, `smoke:tabs` all green. The three
+  documented pre-existing reds fail at EXACTLY the documented spots: `world.sim`
+  ("vehicle detection: need two instances"), `proto.crud` ("add: expected >=6 live
+  instances (3+3), got 4"), `coop.session` (BUG6) — pre-existing sample-world assumptions,
+  unchanged by this work (the M8 bar: the same failure, not a new one).

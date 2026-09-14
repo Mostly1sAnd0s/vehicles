@@ -18,6 +18,7 @@ import { collisionRadius } from '../models/hitTest.js';
 import { bumperAnchorsFor, applyBumperForces } from './bumpers.js';
 import { solidBodyCircles, pushOutOfCircle, pushClearance } from '../models/solidBody.js';
 import { formationPoses, centroid } from '../models/formation.js';
+import { lineageOf } from '../models/lineage.js';
 
 const clone = v => JSON.parse(JSON.stringify(v));
 const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -148,7 +149,9 @@ export class HeadlessWorld {
     // `sensorStates` is the sensor's THERMAL MASS — see evaluateVehicleSensors. It is per
     // instance, not per prototype: two clones of one design are two physical objects, and a
     // robot that parked itself in a furnace must not heat its twin across the world.
-    const inst = { id, protoId, owner, seed: { ...seed }, body: null, wireMap: this._wireMap(v), lastSamples: [], lastMotors: [], sensorStates: new Map() };
+    const inst = { id, protoId, owner, lineage: protoId, seed: { ...seed }, body: null, wireMap: this._wireMap(v), lastSamples: [], lastMotors: [], sensorStates: new Map() };
+    // lineage = the proto this bot COUNTS under (models/lineage.js). It starts as the bot's own
+    // proto and moves only when a Propagator converts it — the "survival of the fittest" tally.
     const body = this._makeBody(v);
     if (!body) return null;
     M_BodySetPosition(this.M, body, { x: seed.x, y: seed.y });
@@ -291,6 +294,7 @@ export class HeadlessWorld {
       if (inst.vehicleOverride || inst.converted) hadPropagation = true;
       inst.vehicleOverride = null;
       inst.converted = false;
+      inst.lineage = inst.protoId; // the scoreboard returns to the initial mix, like the designs
       inst.convertedAt = null;
       inst.flashUntil = 0;
       inst.lastSamples = [];
@@ -350,6 +354,7 @@ export class HeadlessWorld {
         if (!target || target.vehicleOverride) continue;
         target.vehicleOverride = cloneVehicleForConversion(v, Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
         target.converted = true;
+        target.lineage = lineageOf(inst); // the COUNT follows the converter — transitively (models/lineage.js)
         target.convertedAt = this.stepCount;
         target.flashUntil = _now() + 700;
         this.convertedCount++;
@@ -464,7 +469,7 @@ export class HeadlessWorld {
       bots: this.instances.filter(i => i.body).map(i => {
         const v = this.vehicleFor(i);
         return {
-          id: i.id, protoId: i.protoId, owner: i.owner ?? null,
+          id: i.id, protoId: i.protoId, owner: i.owner ?? null, lineage: lineageOf(i),
           x: i.body.position.x, y: i.body.position.y, angle: i.body.angle,
           vx: i.body.velocity.x, vy: i.body.velocity.y,
           // The fallback must match the editor's DEFAULT_BODY_COLOR (public/app/color.js) so a

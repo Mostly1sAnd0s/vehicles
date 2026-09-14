@@ -168,6 +168,52 @@ test('M5: host moveBot repositions a shared bot over the wire; a participant is 
   }
 });
 
+test('M11: a Propagator conversion re-attributes a bot\u2019s lineage on the wire (both clients see it)', async () => {
+  const gw = createCoopGateway({ Matter, configs });
+  const { url } = await gw.start();
+  const alice = new CoopClient();
+  const bob = new CoopClient();
+  try {
+    await alice.connect(url, 'alice', { mode: 'host' });
+    await bob.connect(url, 'bob', { mode: 'join', code: alice.code });
+    // alice: the fittest design (carries a Propagator, 300 radius); bob: a plain one. The
+    // default seeds are 120 apart, so starting the sim converts one of bob\u2019s bots at once.
+    alice.deploy(propagatorDoc());
+    bob.deploy(plainDoc());
+    await waitFor(() => bob.bots.length === 2, 2000, 'both bots in the shared world');
+    alice.controls('start');
+    await waitFor(
+      () => bob.bots.some((b) => b.protoId === bob.you.protoId && b.lineage === alice.you.protoId),
+      4000, 'one of bob\u2019s bots to convert and ride the wire with alice\u2019s lineage',
+    );
+    const taken = bob.bots.find((b) => b.protoId === bob.you.protoId && b.lineage === alice.you.protoId);
+    assert.ok(taken, 'bob\u2019s converted bot rides the wire with alice\u2019s lineage');
+    assert.equal(taken.protoId, bob.you.protoId, 'the bot still BELONGS to bob \u2014 only the count moved');
+    assert.equal(taken.owner, 'bob', 'the popup/ownership label is untouched');
+    assert.equal(taken.ownerToken, bob.you.token, 'identity keys on the (unmoved) token');
+    // alice\u2019s client sees the same re-attribution (one authoritative world).
+    assert.ok(
+      alice.bots.some((b) => b.protoId === bob.you.protoId && b.lineage === alice.you.protoId),
+      'alice\u2019s client counts the converted bot the same way',
+    );
+  } finally {
+    alice.close(); bob.close();
+    await gw.close();
+  }
+});
+
+function propagatorDoc() {
+  const d = seekerDoc();
+  d.components.push({ id: 'prop', type: 'propagate', local: { x: 0, y: 0 }, localRotation: 0, props: { threshold: 300 } });
+  return d;
+}
+
+function plainDoc() {
+  const d = seekerDoc();
+  d.body.color = '#33cc33'; // a genuinely different configuration
+  return d;
+}
+
 function seekerDoc() {
   return {
     body: { shape: 'rect', width: 80, height: 40, color: '#3aa0c0' },

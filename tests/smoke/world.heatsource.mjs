@@ -67,12 +67,23 @@ try {
   };
 
   await send('Page.enable', {});
-  await send('Page.navigate', { url: `http://127.0.0.1:${WEB}/index.html?nc=${NONCE}&worker=0` });
-  for (let i = 0; i < 60; i++) {
-    const ready = await ev(`document.readyState === 'complete' && !!window.__app()`).catch(() => false);
-    if (ready) break;
-    await sleep(200);
+  const url = `http://127.0.0.1:${WEB}/index.html?nc=${NONCE}&worker=0`;
+  // Headless Chrome on this machine intermittently STALLS module loading for tens of seconds
+  // right after first paint (PLAN item-2 NOTE — a renderer scheduling quirk, not an app bug).
+  // Absorb it the way the other probes do: a generous per-attempt wait + re-navigation up to
+  // 2x (RENAV logged) instead of one 12-second wait that turns a single stall into a false
+  // failure — the exact flake this boot loop used to produce in `npm run smoke`.
+  let ready = false;
+  for (let attempt = 0; attempt < 3 && !ready; attempt++) {
+    if (attempt > 0) { console.log('RENAV: re-navigating after a boot stall'); await sleep(1500); }
+    await send('Page.navigate', { url });
+    for (let i = 0; i < 45; i++) {
+      ready = await ev(`typeof window.__app === 'function'`).catch(() => false);
+      if (ready) break;
+      await sleep(500);
+    }
   }
+  if (!ready) fail('app never booted (a page stall survived 3 navigations) — see README "Testing"');
   const boot = await ev(`(() => { const a = window.__app(); document.getElementById('tab-world').click();
     return { app: !!a, sim: !!a.worldSim, heatBtn: !!document.getElementById('add-heat'), heatCfg: a.state.configs?.world?.heat ?? null, heatSensorDef: (a.state.configs.components.components||[]).some(c=>c.id==='heat_sensor') }; })()`);
   if (!boot.app || !boot.sim) fail('app/worldSim did not boot: ' + JSON.stringify(boot));

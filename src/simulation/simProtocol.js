@@ -62,7 +62,7 @@ function reply(world, state, msg, { detail = true, withPaths = false, bots = nul
 function botsOf(world, detail) {
   return world.instances.filter(i => i?.body).map(i => {
     const b = {
-      id: i.id, protoId: i.protoId,
+      id: i.id, protoId: i.protoId, lineage: i.lineage ?? i.protoId, // the converted-bot tally (models/lineage.js)
       x: i.body.position.x, y: i.body.position.y, angle: i.body.angle,
       vx: i.body.velocity.x, vy: i.body.velocity.y,
       flashUntil: i.flashUntil ?? 0,
